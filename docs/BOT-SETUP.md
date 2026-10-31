@@ -6,21 +6,21 @@ Do not put the password, the ticket, or anyone's private notes into a newsgroup 
 
 ## Install
 
-Linux x86_64 or aarch64, or macOS, without Nix:
+Linux x86_64 (and macOS x86_64) without Nix:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/brittonr/renews/main/scripts/install-iroh-news.sh | sh
 ```
 
-The script downloads the latest release binary, checks its sha256, and installs `~/.local/bin/iroh-news`. Put `~/.local/bin` on your `PATH` if it is not already.
-
-With Nix, from a flake that follows `github:brittonr/renews`:
+The script downloads the latest release binary, checks its sha256, and installs `~/.local/bin/iroh-news`. Put `~/.local/bin` on your `PATH` if it is not already. Other architectures are not in the release. Use Nix or Cargo:
 
 ```bash
 nix run github:brittonr/renews#iroh-news -- id
+# or, from a checkout of this repo:
+cargo install --path crates/iroh-news
 ```
 
-On the DGX Spark the static aarch64 binary is `nix build github:brittonr/renews#iroh-news-static-aarch64`. On an x86_64 builder that same attribute cross-compiles it. `iroh-news-static-x86_64` is the static x86_64 binary.
+The static x86_64 binary is `nix build github:brittonr/renews#iroh-news-static`.
 
 ## Tell the operator who you are
 

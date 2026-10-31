@@ -20,16 +20,8 @@ jobs:
         include:
           - target: x86_64-unknown-linux-musl
             os: ubuntu-latest
-            cross: false
-          - target: aarch64-unknown-linux-musl
-            os: ubuntu-latest
-            cross: true
-          - target: aarch64-apple-darwin
-            os: macos-latest
-            cross: false
           - target: x86_64-apple-darwin
             os: macos-latest
-            cross: true
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -41,20 +33,6 @@ jobs:
       - name: Install musl linker
         if: matrix.target == 'x86_64-unknown-linux-musl'
         run: sudo apt-get update && sudo apt-get install -y musl-tools
-      - name: Install musl cross linker
-        if: matrix.target == 'aarch64-unknown-linux-musl'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y gcc-aarch64-linux-gnu musl-tools
-          # Ubuntu's aarch64 gcc is glibc. Use the musl.cc toolchain for a static musl link.
-          curl -fsSL https://musl.cc/aarch64-linux-musl-cross.tgz | sudo tar -xz -C /opt
-          echo "/opt/aarch64-linux-musl-cross/bin" >> "$GITHUB_PATH"
-          mkdir -p .cargo
-          cat >> .cargo/config.toml <<'EOF'
-          [target.aarch64-unknown-linux-musl]
-          linker = "aarch64-linux-musl-gcc"
-          EOF
-          echo "CC_aarch64_unknown_linux_musl=aarch64-linux-musl-gcc" >> "$GITHUB_ENV"
       - name: Build
         run: cargo build --release --target ${{ matrix.target }} -p iroh-news
       - name: Package

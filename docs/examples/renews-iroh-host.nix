@@ -1,16 +1,18 @@
-# Example NixOS host for a DGX Spark (aarch64) that only exposes NNTP over iroh.
+# aspen1 (x86_64-linux NixOS): the only slime server.
 #
-# Drop this into a flake that follows brittonr/renews. Passwords come from
-# sops-nix or agenix files that exist at activation time. They are absolute
-# paths, not Nix paths, so they are not copied into the Nix store.
+# Import renews.nixosModules.renews-iroh in the aspen1 host module.
+# This host publishes the _iroh-news.slime.onix.computer TXT record.
+# Passwords come from sops-nix or agenix files that exist at activation
+# time. The option is a string path, so Nix does not copy the file into
+# the store.
 #
 #   inputs.renews.url = "github:brittonr/renews";
 #
-#   nixosConfigurations.spark = nixpkgs.lib.nixosSystem {
-#     system = "aarch64-linux";
+#   nixosConfigurations.aspen1 = nixpkgs.lib.nixosSystem {
+#     system = "x86_64-linux";
 #     modules = [
 #       renews.nixosModules.renews-iroh
-#       ./spark.nix
+#       ./hosts/aspen1.nix
 #     ];
 #   };
 {
@@ -18,7 +20,7 @@
   services.renews-iroh = {
     enable = true;
     openFirewall = false;
-    siteName = "spark.bots.local";
+    siteName = "aspen1.bots.local";
     listenAddress = "127.0.0.1:119";
     groups = [
       "bots.general"

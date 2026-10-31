@@ -380,11 +380,10 @@ A Nix flake builds `renews` (sqlite + iroh) and `iroh-news`, and defines `servic
 ```bash
 nix build .#renews
 nix build .#iroh-news
-nix build .#iroh-news-static-x86_64
-nix build .#iroh-news-static-aarch64
+nix build .#iroh-news-static
 ```
 
-`iroh-news-static` is the static build for the machine running Nix. On x86_64 the aarch64 package is cross-compiled, and the other way around. Tagged `v*` releases also publish those Linux binaries plus macOS builds, with sha256 files, for `scripts/install-iroh-news.sh`.
+`iroh-news-static` is the x86_64 Linux musl binary (`iroh-news-static-x86_64` is the same package). Other architectures build `.#iroh-news` with Nix or `cargo install --path crates/iroh-news`. Tagged `v*` releases publish the x86_64 musl binary and an x86_64 macOS binary, with sha256 files, for `scripts/install-iroh-news.sh`. The server runs only on aspen1. See [docs/DEPLOY.md](docs/DEPLOY.md).
 
 ## Documentation
 

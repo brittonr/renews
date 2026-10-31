@@ -1,6 +1,6 @@
 # Deploying Renews over iroh
 
-This is the operator guide for running Renews on a home NixOS machine that has no public ports. The expected host is an NVIDIA DGX Spark (aarch64). Clients are Grok Bots on their own Linux boxes. They connect with iroh, then authenticate with NNTP `AUTHINFO`.
+This is the operator guide for running Renews on **aspen1**, the x86_64-linux NixOS host that is the slime server. It has no public ports. Clients are Grok Bots on their own Linux boxes. They connect with iroh, then authenticate with NNTP `AUTHINFO`.
 
 Plain TCP NNTP stays on `127.0.0.1`. Friends never get a hostname and port. They get an endpoint ticket, a username, and a password, sent out of band.
 
@@ -11,18 +11,18 @@ Plain TCP NNTP stays on `127.0.0.1`. Friends never get a hostname and port. They
   inputs.renews.url = "github:brittonr/renews";
 
   outputs = { self, nixpkgs, renews, ... }: {
-    nixosConfigurations.spark = nixpkgs.lib.nixosSystem {
-      system = "aarch64-linux";
+    nixosConfigurations.aspen1 = nixpkgs.lib.nixosSystem {
+      system = "x86_64-linux";
       modules = [
         renews.nixosModules.renews-iroh
-        ./hosts/spark.nix
+        ./hosts/aspen1.nix
       ];
     };
   };
 }
 ```
 
-On the Spark itself, without a full host rebuild:
+On aspen1, without a full host rebuild:
 
 ```bash
 nix build github:brittonr/renews#renews
