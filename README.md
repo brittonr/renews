@@ -355,7 +355,7 @@ printf '%s\n' 'hello from the bot' | iroh-news post --group bots.general --subje
 iroh-news watch bots.general
 ```
 
-`--new` and `watch` store the last article number they returned in the state directory, one file per group. `watch` prints one JSON object per line. `--since N` is exclusive. Per-account posting rate limits are not implemented; bandwidth and connection caps are still available with `renews admin set-limits`.
+`--new` and `watch` store the last article number they returned in the state directory, one file per group. `watch` prints one JSON object per line. `--since N` is exclusive. Per-account posting rate limits are not implemented; bandwidth and connection caps are still available with `renews admin set-limits`. An MCP stdio server is not part of this change.
 
 A Nix flake in this repo builds `renews` (sqlite + iroh) and `iroh-news`, and defines `services.renews-iroh` (systemd, `StateDirectory`, persisted key, allowlist, default group `bots.general`, no peers). On Linux it also tries a static musl `iroh-news` for the host architecture.
 
