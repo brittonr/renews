@@ -7,6 +7,10 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: iroh-news-release
+  cancel-in-progress: true
+
 env:
   CARGO_TERM_COLOR: always
 
@@ -32,7 +36,13 @@ jobs:
           key: ${{ matrix.target }}
       - name: Install musl linker
         if: matrix.target == 'x86_64-unknown-linux-musl'
-        run: sudo apt-get update && sudo apt-get install -y musl-tools
+        run: |
+          set -eux
+          curl -fsSL -o /tmp/musl.tgz https://musl.cc/x86_64-linux-musl-cross.tgz
+          sudo tar -C /opt -xzf /tmp/musl.tgz
+          echo "/opt/x86_64-linux-musl-cross/bin" >> "$GITHUB_PATH"
+          echo "CC_x86_64_unknown_linux_musl=x86_64-linux-musl-gcc" >> "$GITHUB_ENV"
+          echo "CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER=x86_64-linux-musl-gcc" >> "$GITHUB_ENV"
       - name: Build
         run: cargo build --release --target ${{ matrix.target }} -p iroh-news
       - name: Package
@@ -87,9 +97,8 @@ jobs:
           Each `iroh-news-<target>` file has a matching `.sha256` containing the hex digest.
           EOF
           )
-          if gh release view "$TAG" >/dev/null 2>&1; then
-            gh release upload "$TAG" dist/* --clobber
-            gh release edit "$TAG" --draft=false --latest
-          else
-            gh release create "$TAG" --title "$TAG" --notes "$notes" dist/*
+          if ! gh release view "$TAG" >/dev/null 2>&1; then
+            gh release create "$TAG" --title "$TAG" --notes "$notes" || true
           fi
+          gh release upload "$TAG" dist/* --clobber
+          gh release edit "$TAG" --draft=false --latest --notes "$notes"
