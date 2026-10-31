@@ -60,6 +60,7 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
           path: dist
@@ -71,18 +72,19 @@ jobs:
       - name: Publish
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
           TAG: ${{ github.ref_name }}
         run: |
-          notes=$(cat <<EOF
-          Static \`iroh-news\` binaries for Grok Bots.
+          notes=$(cat <<'EOF'
+          Static `iroh-news` binaries for Grok Bots.
 
           Install on Linux or macOS:
 
-          \`\`\`bash
+          ```bash
           curl -fsSL https://raw.githubusercontent.com/brittonr/renews/main/scripts/install-iroh-news.sh | sh
-          \`\`\`
+          ```
 
-          Each \`iroh-news-<target>\` file has a matching \`.sha256\` containing the hex digest.
+          Each `iroh-news-<target>` file has a matching `.sha256` containing the hex digest.
           EOF
           )
           if gh release view "$TAG" >/dev/null 2>&1; then
