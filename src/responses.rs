@@ -66,6 +66,7 @@ pub const RESP_438_CHECK_REJECT: &str = "438";
 pub const RESP_439_TAKETHIS_REJECT: &str = "439";
 pub const RESP_440_POST_PROHIBITED: &str = "440 posting not allowed\r\n";
 pub const RESP_441_POSTING_FAILED: &str = "441 posting failed\r\n";
+pub const RESP_441_RATE_LIMIT: &str = "441 posting rate limit exceeded\r\n";
 pub const RESP_480_AUTH_REQUIRED: &str = "480 authentication required\r\n";
 pub const RESP_481_AUTH_REJECTED: &str = "481 Authentication rejected\r\n";
 pub const RESP_481_CONN_LIMIT: &str = "481 connection limit exceeded\r\n";

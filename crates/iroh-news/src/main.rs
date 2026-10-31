@@ -28,6 +28,10 @@ struct Cli {
     /// Dial using only addresses in the ticket (no n0 relays).
     #[arg(long, global = true)]
     no_relays: bool,
+    /// Server ticket, endpoint id, or DNS name such as slime.onix.computer.
+    /// Overrides the config file and `IROH_NEWS_SERVER`.
+    #[arg(long, global = true)]
+    server: Option<String>,
     #[command(subcommand)]
     command: Command,
 }
@@ -72,8 +76,12 @@ enum Command {
 
 #[derive(Debug, Deserialize)]
 struct FileConfig {
-    server: String,
-    username: String,
+    /// Endpoint ticket or endpoint id. Overridden by `IROH_NEWS_SERVER`.
+    #[serde(default)]
+    server: Option<String>,
+    /// NNTP username. Overridden by `IROH_NEWS_USERNAME`.
+    #[serde(default)]
+    username: Option<String>,
     #[serde(default)]
     password: Option<String>,
     #[serde(default)]
@@ -216,27 +224,50 @@ fn load_settings(cli: &Cli, state_dir: &Path) -> anyhow::Result<Settings> {
         .with_context(|| format!("reading config {}", path.display()))?;
     let file: FileConfig =
         toml::from_str(&text).with_context(|| format!("parsing config {}", path.display()))?;
-    let password = if let Some(password_file) = &file.password_file {
-        std::fs::read_to_string(password_file)
-            .with_context(|| format!("reading {}", password_file.display()))?
-            .trim_end_matches(['\r', '\n'])
-            .to_string()
+    let username = std::env::var("IROH_NEWS_USERNAME")
+        .ok()
+        .or(file.username)
+        .context("set IROH_NEWS_USERNAME or username in the config")?;
+    let server = cli
+        .server
+        .clone()
+        .or_else(|| std::env::var("IROH_NEWS_SERVER").ok())
+        .or(file.server)
+        .context("set --server, IROH_NEWS_SERVER, or server in the config")?;
+    let password = if let Ok(password) = std::env::var("IROH_NEWS_PASSWORD") {
+        password
+    } else if let Ok(path) = std::env::var("IROH_NEWS_PASSWORD_FILE") {
+        read_password_file(Path::new(&path))?
+    } else if let Some(password_file) = &file.password_file {
+        read_password_file(password_file)?
     } else {
-        file.password
-            .context("config needs password or password_file")?
+        file.password.context(
+            "set IROH_NEWS_PASSWORD, IROH_NEWS_PASSWORD_FILE, or password/password_file in the config",
+        )?
     };
-    let from = file
-        .from
-        .unwrap_or_else(|| format!("{}@bots.local", file.username));
+    let from = std::env::var("IROH_NEWS_FROM")
+        .ok()
+        .or(file.from)
+        .unwrap_or_else(|| format!("{username}@bots.local"));
     Ok(Settings {
-        server: file.server,
-        username: file.username,
+        server,
+        username,
         password,
         from,
         secret_key: load_or_create_secret_key(state_dir)?,
         relays: !cli.no_relays,
         state_dir: state_dir.to_path_buf(),
     })
+}
+
+fn read_password_file(path: &Path) -> anyhow::Result<String> {
+    let text = std::fs::read_to_string(path)
+        .with_context(|| format!("reading password file {}", path.display()))?;
+    let trimmed = text.trim_end_matches(['\r', '\n']).to_string();
+    if trimmed.is_empty() {
+        bail!("password file {} is empty", path.display());
+    }
+    Ok(trimmed)
 }
 
 fn print_json(value: &impl Serialize) -> anyhow::Result<()> {

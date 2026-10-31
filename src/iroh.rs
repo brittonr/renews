@@ -47,6 +47,9 @@ pub struct IrohBind {
     /// Wait briefly for an n0 relay so the printed ticket includes one.
     /// Tests on a single machine set this to false and pass direct addresses.
     pub wait_for_relay: bool,
+    /// Where to store the latest ticket so `renews admin discovery-txt` can
+    /// print a DNS TXT value without parsing the journal.
+    pub ticket_path: Option<std::path::PathBuf>,
     /// Bind only this socket. `None` binds every interface.
     /// Tests pass `127.0.0.1:0` so the ticket contains a loopback address.
     pub bind_addr: Option<std::net::SocketAddr>,
@@ -178,6 +181,9 @@ pub async fn serve(parts: IrohParts, bind: IrohBind) -> anyhow::Result<IrohServe
     let addr = router.endpoint().addr();
     let endpoint_id = router.endpoint().id();
     let ticket = EndpointTicket::new(addr).encode_string();
+    if let Some(path) = &bind.ticket_path {
+        write_ticket_file(path, &ticket)?;
+    }
     println!("iroh endpoint id: {endpoint_id}");
     println!("iroh ticket: {ticket}");
     tracing::info!(%endpoint_id, %ticket, "iroh listener ready");
@@ -187,6 +193,22 @@ pub async fn serve(parts: IrohParts, bind: IrohBind) -> anyhow::Result<IrohServe
         endpoint_id,
         ticket,
     })
+}
+
+fn write_ticket_file(path: &std::path::Path, ticket: &str) -> anyhow::Result<()> {
+    if let Some(parent) = path.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(path, ticket).with_context(|| format!("writing ticket {}", path.display()))?;
+    Ok(())
+}
+
+/// Path of the ticket file next to an iroh secret key (`iroh.key` -> `iroh.ticket`).
+#[must_use]
+pub fn ticket_path_for_key(key_path: &std::path::Path) -> std::path::PathBuf {
+    key_path.with_extension("ticket")
 }
 
 async fn wait_for_ip(endpoint: &Endpoint, budget: Duration) -> EndpointAddr {

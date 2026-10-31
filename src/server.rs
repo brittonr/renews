@@ -460,12 +460,14 @@ impl Server {
     /// Start the iroh listener when `[iroh] enabled` is set.
     #[cfg(feature = "iroh")]
     async fn start_iroh_listener(&self) -> ServerResult<Option<crate::iroh::IrohServer>> {
-        let (enabled, key_path, allowed_peers) = {
+        let (enabled, key_path, allowed_peers, bind_addr, wait_for_relay) = {
             let cfg = self.components.config.read().await;
             (
                 cfg.iroh.enabled,
                 cfg.iroh.key_path.clone(),
                 cfg.iroh.allowed_peers.clone(),
+                cfg.iroh.bind_addr.clone(),
+                cfg.iroh.wait_for_relay,
             )
         };
         if !enabled {
@@ -494,8 +496,15 @@ impl Server {
             crate::iroh::IrohBind {
                 secret_key,
                 relay_mode: iroh::endpoint::RelayMode::Default,
-                wait_for_relay: true,
-                bind_addr: None,
+                wait_for_relay,
+                bind_addr: bind_addr
+                    .as_deref()
+                    .map(str::parse)
+                    .transpose()
+                    .map_err(|err| anyhow::anyhow!("invalid iroh.bind_addr: {err}"))?,
+                ticket_path: Some(crate::iroh::ticket_path_for_key(std::path::Path::new(
+                    &key_path,
+                ))),
             },
         )
         .await?;

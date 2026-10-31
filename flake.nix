@@ -76,41 +76,83 @@
           }
         );
 
-        # Static musl build of the bot CLI for the current Linux architecture.
-        # iroh-news does not link SQLite. The server package stays dynamically linked.
-        muslTarget =
-          if pkgs.stdenv.hostPlatform.isAarch64 then
-            "aarch64-unknown-linux-musl"
-          else if pkgs.stdenv.hostPlatform.isx86_64 then
-            "x86_64-unknown-linux-musl"
+        # Static musl iroh-news. The host target uses pkgsStatic. The other
+        # Linux musl target is cross-compiled so an x86_64 builder can produce
+        # the aarch64 bot binary and a DGX Spark can produce the x86_64 one.
+        mkIrohNewsStatic =
+          target: cc:
+          craneLib.buildPackage {
+            pname = "iroh-news-static";
+            inherit src;
+            strictDeps = true;
+            doCheck = false;
+            CARGO_BUILD_TARGET = target;
+            cargoExtraArgs = "-p iroh-news";
+            nativeBuildInputs = [ cc ];
+            env = {
+              CC = "${cc}/bin/${cc.targetPrefix}cc";
+              "CARGO_TARGET_${
+                pkgs.lib.toUpper (pkgs.lib.replaceStrings [ "-" ] [ "_" ] target)
+              }_LINKER" =
+                "${cc}/bin/${cc.targetPrefix}cc";
+            };
+            meta.mainProgram = "iroh-news";
+          };
+
+        linuxMusl =
+          if pkgs.stdenv.hostPlatform.isx86_64 then
+            {
+              x86_64 = {
+                target = "x86_64-unknown-linux-musl";
+                cc = pkgs.pkgsStatic.stdenv.cc;
+              };
+              aarch64 = {
+                target = "aarch64-unknown-linux-musl";
+                cc = pkgs.pkgsCross.aarch64-multiplatform-musl.stdenv.cc;
+              };
+            }
+          else if pkgs.stdenv.hostPlatform.isAarch64 then
+            {
+              x86_64 = {
+                target = "x86_64-unknown-linux-musl";
+                cc = pkgs.pkgsCross.musl64.stdenv.cc;
+              };
+              aarch64 = {
+                target = "aarch64-unknown-linux-musl";
+                cc = pkgs.pkgsStatic.stdenv.cc;
+              };
+            }
           else
             null;
 
-        iroh-news-static =
-          if muslTarget == null then
+        iroh-news-static-x86_64 =
+          if linuxMusl == null then null else mkIrohNewsStatic linuxMusl.x86_64.target linuxMusl.x86_64.cc;
+        iroh-news-static-aarch64 =
+          if linuxMusl == null then
             null
           else
-            craneLib.buildPackage {
-              pname = "iroh-news-static";
-              inherit src;
-              strictDeps = true;
-              CARGO_BUILD_TARGET = muslTarget;
-              cargoExtraArgs = "-p iroh-news";
-              doCheck = false;
-              nativeBuildInputs = [
-                pkgs.pkg-config
-                pkgs.pkgsStatic.stdenv.cc
-              ];
-              meta.mainProgram = "iroh-news";
-            };
+            mkIrohNewsStatic linuxMusl.aarch64.target linuxMusl.aarch64.cc;
+        iroh-news-static =
+          if pkgs.stdenv.hostPlatform.isAarch64 then
+            iroh-news-static-aarch64
+          else
+            iroh-news-static-x86_64;
       in
       {
+        checks = {
+          inherit renews;
+        };
+
         packages = {
           inherit renews iroh-news;
           default = renews;
         }
-        // pkgs.lib.optionalAttrs (iroh-news-static != null) {
-          inherit iroh-news-static;
+        // pkgs.lib.optionalAttrs (linuxMusl != null) {
+          inherit
+            iroh-news-static
+            iroh-news-static-x86_64
+            iroh-news-static-aarch64
+            ;
         };
 
         devShells.default = craneLib.devShell {

@@ -47,15 +47,37 @@ enum AdminCommand {
     /// Add a user with optional PGP key
     AddUser {
         user: String,
-        pass: String,
+        /// Password. Omit when `--password-file` is set.
+        #[arg(required_unless_present = "password_file")]
+        pass: Option<String>,
+        /// Read the password from a file. The trailing newline is stripped.
+        /// The file is not copied anywhere; use this for agenix/sops paths.
+        #[arg(long)]
+        password_file: Option<std::path::PathBuf>,
         /// Optional PGP public key
         #[arg(long)]
         pgp_key: Option<String>,
     },
     /// Update user password
-    UpdatePassword { user: String, new_pass: String },
+    UpdatePassword {
+        user: String,
+        /// New password. Omit when `--password-file` is set.
+        #[arg(required_unless_present = "password_file")]
+        new_pass: Option<String>,
+        /// Read the new password from a file. The trailing newline is stripped.
+        #[arg(long)]
+        password_file: Option<std::path::PathBuf>,
+    },
     /// Remove a user
     RemoveUser { user: String },
+    /// Print the DNS TXT record for this server's current iroh ticket.
+    ///
+    /// The name is the public DNS name, for example `slime.onix.computer`.
+    /// Publish `_iroh-news.<name>` in the onix.computer zone.
+    DiscoveryTxt {
+        /// Public name, without the `_iroh-news` label.
+        name: String,
+    },
     /// Update user's PGP key
     UpdateKey { user: String, pgp_key: String },
     /// Set moderation status for a group
@@ -208,6 +230,21 @@ async fn export_groups(storage: &storage::DynStorage) -> Result<()> {
     Ok(())
 }
 
+/// Prefer a password file over a command-line value so secrets stay out of the Nix store.
+fn read_secret(value: Option<String>, file: Option<std::path::PathBuf>) -> Result<String> {
+    if let Some(path) = file {
+        let text = std::fs::read_to_string(&path).map_err(|err| {
+            anyhow::anyhow!("failed to read password file {}: {err}", path.display())
+        })?;
+        let trimmed = text.trim_end_matches(['\r', '\n']).to_string();
+        if trimmed.is_empty() {
+            return Err(anyhow::anyhow!("password file {} is empty", path.display()));
+        }
+        return Ok(trimmed);
+    }
+    value.ok_or_else(|| anyhow::anyhow!("password is required"))
+}
+
 async fn run_admin(cmd: AdminCommand, cfg: &Config) -> Result<()> {
     let storage = storage::open(&cfg.db_path).await?;
     let auth = auth::open(&cfg.auth_db_path).await?;
@@ -226,16 +263,41 @@ async fn run_admin(cmd: AdminCommand, cfg: &Config) -> Result<()> {
         AdminCommand::AddUser {
             user,
             pass,
+            password_file,
             pgp_key,
         } => {
+            let pass = read_secret(pass, password_file)?;
             auth.add_user_with_key(&user, &pass, pgp_key.as_deref())
                 .await?;
         }
-        AdminCommand::UpdatePassword { user, new_pass } => {
+        AdminCommand::UpdatePassword {
+            user,
+            new_pass,
+            password_file,
+        } => {
+            let new_pass = read_secret(new_pass, password_file)?;
             auth.update_password(&user, &new_pass).await?;
         }
         AdminCommand::RemoveUser { user } => {
             auth.remove_user(&user).await?;
+        }
+        AdminCommand::DiscoveryTxt { name } => {
+            let path = std::path::Path::new(&cfg.iroh.key_path).with_extension("ticket");
+            let ticket = std::fs::read_to_string(&path).map_err(|err| {
+                anyhow::anyhow!(
+                    "failed to read {} ({err}). Start the server once so it can write the ticket.",
+                    path.display()
+                )
+            })?;
+            let ticket = ticket.trim();
+            if !ticket.starts_with("endpoint") {
+                return Err(anyhow::anyhow!(
+                    "{} does not contain an endpoint ticket",
+                    path.display()
+                ));
+            }
+            println!("_iroh-news.{name}. IN TXT \"ticket={ticket}\"");
+            println!("ticket={ticket}");
         }
         AdminCommand::UpdateKey { user, pgp_key } => {
             auth.update_pgp_key(&user, &pgp_key).await?;

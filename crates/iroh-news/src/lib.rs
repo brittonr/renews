@@ -6,17 +6,18 @@
 use std::io;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
-use std::str::FromStr;
 use std::task::{Context, Poll, ready};
 
 use anyhow::{Context as _, bail};
 use iroh::endpoint::{Connection, RelayMode, presets};
-use iroh::{Endpoint, EndpointAddr, SecretKey};
-use iroh_tickets::endpoint::EndpointTicket;
+use iroh::{Endpoint, SecretKey};
 use nntp_client::NntpClient;
 use serde::Serialize;
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 
+mod discover;
+
+pub use discover::{DiscoveryRecord, cloudflare_txt_line, discovery_qname, parse_txt_records};
 pub use nntp_client::{Article, GroupEntry, Overview};
 
 /// ALPN shared with the renews iroh listener.
@@ -86,7 +87,9 @@ impl Session {
             .await
             .map_err(|err| anyhow::anyhow!("bind iroh endpoint: {err}"))?;
 
-        let addr = server_addr(&settings.server)?;
+        let addr =
+            discover::resolve_server(&settings.server, &settings.state_dir, &discover::HickoryTxt)
+                .await?;
         let connection = endpoint
             .connect(addr, ALPN)
             .await
@@ -334,19 +337,6 @@ fn cursor_path(state_dir: &Path, group: &str) -> anyhow::Result<PathBuf> {
         bail!("invalid group name");
     }
     Ok(state_dir.join("cursors").join(group))
-}
-
-fn server_addr(server: &str) -> anyhow::Result<EndpointAddr> {
-    let server = server.trim();
-    if server.starts_with("endpoint") {
-        let ticket = EndpointTicket::from_str(server)
-            .map_err(|err| anyhow::anyhow!("invalid endpoint ticket: {err}"))?;
-        return Ok(ticket.endpoint_addr().clone());
-    }
-    let id = server.parse().map_err(|err| {
-        anyhow::anyhow!("server must be an endpoint ticket or endpoint id: {err}")
-    })?;
-    Ok(EndpointAddr::new(id))
 }
 
 trait ByteIo: AsyncRead + AsyncWrite + Send {}

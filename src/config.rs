@@ -60,6 +60,16 @@ fn default_true() -> bool {
     true
 }
 
+/// Sustained posts per account per minute. Six is about one post every ten seconds.
+fn default_post_rate_per_minute() -> u32 {
+    6
+}
+
+/// How many posts an account may send in a burst before the sustained rate applies.
+fn default_post_burst() -> u32 {
+    3
+}
+
 fn default_iroh_key_path() -> String {
     "/var/lib/renews/iroh.key".into()
 }
@@ -83,6 +93,15 @@ pub struct IrohConfig {
     /// When `enabled` and `addr` has no host, bind plain NNTP on 127.0.0.1.
     #[serde(default = "default_true")]
     pub localhost_tcp: bool,
+
+    /// Optional UDP bind address for the iroh endpoint, for example `127.0.0.1:0`.
+    /// Unset binds every interface, which is what a home server wants.
+    #[serde(default)]
+    pub bind_addr: Option<String>,
+
+    /// Wait up to 15s for an n0 relay before printing the ticket.
+    #[serde(default = "default_true")]
+    pub wait_for_relay: bool,
 }
 
 impl Default for IrohConfig {
@@ -92,6 +111,8 @@ impl Default for IrohConfig {
             key_path: default_iroh_key_path(),
             allowed_peers: Vec::new(),
             localhost_tcp: true,
+            bind_addr: None,
+            wait_for_relay: true,
         }
     }
 }
@@ -449,6 +470,14 @@ pub struct UserLimitsConfig {
         deserialize_with = "deserialize_duration_secs"
     )]
     pub bandwidth_period: Option<u64>,
+
+    /// Sustained POST rate per authenticated account. `0` disables the limit.
+    #[serde(default = "default_post_rate_per_minute")]
+    pub post_rate_per_minute: u32,
+
+    /// Token-bucket burst. Ignored when `post_rate_per_minute` is `0`.
+    #[serde(default = "default_post_burst")]
+    pub post_burst: u32,
 }
 
 impl Default for UserLimitsConfig {
@@ -458,6 +487,8 @@ impl Default for UserLimitsConfig {
             max_connections: 0,
             bandwidth_limit: None,
             bandwidth_period: default_bandwidth_period_secs(),
+            post_rate_per_minute: default_post_rate_per_minute(),
+            post_burst: default_post_burst(),
         }
     }
 }
@@ -874,6 +905,8 @@ mod tests {
         .unwrap();
         assert!(!config.iroh.enabled);
         assert!(config.iroh.localhost_tcp);
+        assert_eq!(config.user_limits.post_rate_per_minute, 6);
+        assert_eq!(config.user_limits.post_burst, 3);
         assert!(config.iroh.allowed_peers.is_empty());
         assert_eq!(config.iroh.key_path, "/var/lib/renews/iroh.key");
 

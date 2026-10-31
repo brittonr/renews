@@ -40,9 +40,18 @@ impl CommandHandler for PostHandler {
         // Check per-user posting permission (only for authenticated non-admin users)
         if ctx.session.is_authenticated() && !ctx.session.is_admin() {
             if let Some(username) = ctx.session.username() {
-                if ctx.usage_tracker.can_post(username).await == LimitCheckResult::PostingDisabled {
+                let username = username.to_string();
+                if ctx.usage_tracker.can_post(&username).await == LimitCheckResult::PostingDisabled
+                {
                     Span::current().record("outcome", "rejected_posting_disabled");
                     write_simple(&mut ctx.writer, RESP_440_POST_PROHIBITED).await?;
+                    return Ok(());
+                }
+                if ctx.usage_tracker.try_consume_post(&username).await
+                    == LimitCheckResult::PostRateExceeded
+                {
+                    Span::current().record("outcome", "rejected_rate_limit");
+                    write_simple(&mut ctx.writer, RESP_441_RATE_LIMIT).await?;
                     return Ok(());
                 }
             }

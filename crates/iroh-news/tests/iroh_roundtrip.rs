@@ -60,6 +60,7 @@ async fn allowed_bot_posts_and_reads_stranger_is_rejected() {
             relay_mode: RelayMode::Disabled,
             wait_for_relay: false,
             bind_addr: Some("127.0.0.1:0".parse().unwrap()),
+            ticket_path: None,
         },
     )
     .await

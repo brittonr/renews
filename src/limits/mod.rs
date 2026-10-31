@@ -6,8 +6,10 @@
 //! - Connection limits (max simultaneous connections)
 //! - Usage tracking with time-windowed resets
 
+mod post_rate;
 mod tracker;
 
+pub use post_rate::TokenBucket;
 pub use tracker::UsageTracker;
 
 use chrono::{DateTime, Utc};
@@ -104,6 +106,9 @@ pub enum LimitCheckResult {
 
     /// Connection limit has been exceeded
     ConnectionLimitExceeded,
+
+    /// The account's posting token bucket is empty
+    PostRateExceeded,
 }
 
 impl LimitCheckResult {
@@ -182,5 +187,8 @@ mod tests {
 
         assert!(!LimitCheckResult::ConnectionLimitExceeded.is_allowed());
         assert!(LimitCheckResult::ConnectionLimitExceeded.is_denied());
+
+        assert!(!LimitCheckResult::PostRateExceeded.is_allowed());
+        assert!(LimitCheckResult::PostRateExceeded.is_denied());
     }
 }

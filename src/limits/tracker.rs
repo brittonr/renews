@@ -8,6 +8,7 @@
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::Instant;
 
 use chrono::{DateTime, Duration, Utc};
 use dashmap::DashMap;
@@ -16,6 +17,7 @@ use tokio::sync::RwLock;
 use crate::auth::DynAuth;
 use crate::config::UserLimitsConfig;
 
+use super::post_rate::TokenBucket;
 use super::{LimitCheckResult, UserLimits, UserUsage};
 
 /// In-memory bandwidth state for a user.
@@ -55,6 +57,9 @@ pub struct UsageTracker {
     /// Default limits from configuration
     defaults: RwLock<UserLimitsConfig>,
 
+    /// Per-account POST token buckets
+    post_buckets: DashMap<String, TokenBucket>,
+
     /// Auth provider for looking up per-user limits and admin status
     auth: DynAuth,
 }
@@ -67,6 +72,7 @@ impl UsageTracker {
             bandwidth: DashMap::new(),
             limits_cache: DashMap::new(),
             defaults: RwLock::new(defaults),
+            post_buckets: DashMap::new(),
             auth,
         }
     }
@@ -102,6 +108,33 @@ impl UsageTracker {
             },
             bandwidth_limit: defaults.bandwidth_limit,
             bandwidth_period_secs: defaults.bandwidth_period,
+        }
+    }
+
+    /// Consume one posting token for `username`.
+    ///
+    /// A configured rate of zero allows every post. Admins are not passed here;
+    /// the POST handler skips this check for them.
+    pub async fn try_consume_post(&self, username: &str) -> LimitCheckResult {
+        let (rate, burst) = {
+            let defaults = self.defaults.read().await;
+            (defaults.post_rate_per_minute, defaults.post_burst)
+        };
+        if rate == 0 {
+            return LimitCheckResult::Allowed;
+        }
+        let now = Instant::now();
+        let mut bucket = self
+            .post_buckets
+            .entry(username.to_string())
+            .or_insert_with(|| TokenBucket::new(rate, burst, now));
+        if !bucket.matches(rate, burst) {
+            *bucket = TokenBucket::new(rate, burst, now);
+        }
+        if bucket.try_take(now) {
+            LimitCheckResult::Allowed
+        } else {
+            LimitCheckResult::PostRateExceeded
         }
     }
 

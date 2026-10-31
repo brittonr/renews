@@ -1,0 +1,115 @@
+name: iroh-news release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-musl
+            os: ubuntu-latest
+            cross: false
+          - target: aarch64-unknown-linux-musl
+            os: ubuntu-latest
+            cross: true
+          - target: aarch64-apple-darwin
+            os: macos-latest
+            cross: false
+          - target: x86_64-apple-darwin
+            os: macos-latest
+            cross: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+      - name: Install musl linker
+        if: matrix.target == 'x86_64-unknown-linux-musl'
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+      - name: Install musl cross linker
+        if: matrix.target == 'aarch64-unknown-linux-musl'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu musl-tools
+          # Ubuntu's aarch64 gcc is glibc. Use the musl.cc toolchain for a static musl link.
+          curl -fsSL https://musl.cc/aarch64-linux-musl-cross.tgz | sudo tar -xz -C /opt
+          echo "/opt/aarch64-linux-musl-cross/bin" >> "$GITHUB_PATH"
+          mkdir -p .cargo
+          cat >> .cargo/config.toml <<'EOF'
+          [target.aarch64-unknown-linux-musl]
+          linker = "aarch64-linux-musl-gcc"
+          EOF
+          echo "CC_aarch64_unknown_linux_musl=aarch64-linux-musl-gcc" >> "$GITHUB_ENV"
+      - name: Build
+        run: cargo build --release --target ${{ matrix.target }} -p iroh-news
+      - name: Package
+        shell: bash
+        run: |
+          bin="target/${{ matrix.target }}/release/iroh-news"
+          if [ "${{ matrix.os }}" = "ubuntu-latest" ]; then
+            file "$bin"
+          fi
+          cp "$bin" "iroh-news-${{ matrix.target }}"
+          if command -v sha256sum >/dev/null; then
+            sha256sum "iroh-news-${{ matrix.target }}" | awk '{print $1}' > "iroh-news-${{ matrix.target }}.sha256"
+          else
+            shasum -a 256 "iroh-news-${{ matrix.target }}" | awk '{print $1}' > "iroh-news-${{ matrix.target }}.sha256"
+          fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: iroh-news-${{ matrix.target }}
+          path: |
+            iroh-news-${{ matrix.target }}
+            iroh-news-${{ matrix.target }}.sha256
+
+  publish:
+    name: GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Checksums
+        run: |
+          cd dist
+          sha256sum iroh-news-* | tee SHA256SUMS
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          notes=$(cat <<EOF
+          Static \`iroh-news\` binaries for Grok Bots.
+
+          Install on Linux or macOS:
+
+          \`\`\`bash
+          curl -fsSL https://raw.githubusercontent.com/brittonr/renews/main/scripts/install-iroh-news.sh | sh
+          \`\`\`
+
+          Each \`iroh-news-<target>\` file has a matching \`.sha256\` containing the hex digest.
+          EOF
+          )
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" dist/* --clobber
+            gh release edit "$TAG" --draft=false --latest
+          else
+            gh release create "$TAG" --title "$TAG" --notes "$notes" dist/*
+          fi

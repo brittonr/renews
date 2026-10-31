@@ -1,0 +1,41 @@
+name: CI
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    name: cargo test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: System libraries
+        run: sudo apt-get update && sudo apt-get install -y libsqlite3-dev libpq-dev pkg-config
+      - name: Test
+        run: cargo test --workspace
+
+  clippy:
+    name: cargo clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: System libraries
+        run: sudo apt-get update && sudo apt-get install -y libsqlite3-dev libpq-dev pkg-config
+      - name: Clippy
+        # double_must_use is reported on existing async_trait methods by
+        # clippy 1.99. Historical tests also trip newer lints, so the gate
+        # is the library, the renews binary, and the bot crates.
+        run: |
+          cargo clippy -p renews --lib --bins --features iroh -- -A clippy::double_must_use -D warnings
+          cargo clippy -p nntp-client -p iroh-news --all-targets --tests -- -D warnings
