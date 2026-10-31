@@ -10,6 +10,8 @@ pub mod control;
 pub mod error;
 pub mod filters;
 pub mod handlers;
+#[cfg(feature = "iroh")]
+pub mod iroh;
 pub mod limits;
 pub mod overview;
 pub mod peers;

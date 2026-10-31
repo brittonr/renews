@@ -65,6 +65,16 @@ group = "comp.lang.rust"
 retention_days = 60
 max_article_bytes = "1M"
 
+# iroh transport (requires `cargo build --features iroh`)
+# When enabled, a host-less `addr` binds to 127.0.0.1.
+# allowed_peers is a list of bot endpoint ids (`iroh-news id`). Empty rejects everyone.
+# The secret key at key_path is created on first start and must be kept.
+# [iroh]
+# enabled = false
+# key_path = "/var/lib/renews/iroh.key"
+# localhost_tcp = true
+# allowed_peers = []
+
 # Peer configuration
 # [[peer]]
 # sitename = "peeruser:peerpass@peer.example.com" # Peer name with credentials

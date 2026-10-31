@@ -253,6 +253,26 @@ For web-based NNTP clients:
 
 Web clients can connect via WebSocket and use NNTP protocol over the connection.
 
+## iroh
+
+Build with `--features iroh`. The `[iroh]` table is ignored by binaries built without that feature (a warning is logged if `enabled` is set).
+
+```toml
+addr = "127.0.0.1:119"
+
+[iroh]
+enabled = true
+key_path = "/var/lib/renews/iroh.key"
+localhost_tcp = true
+allowed_peers = ["<endpoint id from iroh-news id>"]
+```
+
+- `key_path` — 32-byte endpoint secret key. Created on first start, mode `0600`. The endpoint id is stable for the life of this file.
+- `allowed_peers` — endpoint ids permitted to open a QUIC connection. Empty rejects every peer. Reloaded on `SIGHUP`.
+- `localhost_tcp` — when `enabled` (the default is true), a host-less `addr` such as `:119` binds to `127.0.0.1`. An explicit host (`0.0.0.0:119`, `127.0.0.1:119`) is unchanged. systemd socket URLs are unchanged.
+
+On startup the server prints `iroh endpoint id:` and `iroh ticket:`. Bots put the ticket in `~/.config/iroh-news/config.toml` as `server`. See the README section "Bots over iroh" for the `iroh-news` commands.
+
 ## Runtime Configuration Reload
 
 Send `SIGHUP` to reload configuration:

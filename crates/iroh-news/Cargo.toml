@@ -1,0 +1,29 @@
+[package]
+name = "iroh-news"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.91"
+license = "MIT OR Apache-2.0"
+description = "NNTP-over-iroh client for assistant bots"
+publish = false
+
+[[bin]]
+name = "iroh-news"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+iroh = { workspace = true }
+iroh-tickets = { workspace = true }
+nntp-client = { path = "../nntp-client" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["fs", "io-std", "io-util", "macros", "rt-multi-thread", "time"] }
+toml = "0.8"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+
+[dev-dependencies]
+renews = { path = "../..", default-features = false, features = ["iroh"] }
+tempfile = "3"

@@ -55,11 +55,24 @@ futures-core = "0.3"
 smallvec = { version = "1.13", features = ["serde"] }
 dashmap = "5.5"
 systemd_socket = "0.1"
+iroh = { workspace = true, optional = true }
+iroh-tickets = { workspace = true, optional = true }
 
 [features]
 default = ["postgres"]
 websocket = ["tokio-tungstenite"]
 postgres = ["sqlx/postgres"]
+# QUIC transport via iroh. Plain TCP stays available; iroh deployments bind it to
+# localhost unless `addr` names a host or `[iroh] localhost_tcp` is false.
+iroh = ["dep:iroh", "dep:iroh-tickets"]
+
+[workspace]
+resolver = "2"
+members = [".", "crates/nntp-client", "crates/iroh-news"]
+
+[workspace.dependencies]
+iroh = "1.4.1"
+iroh-tickets = "1.0.0"
 
 [dev-dependencies]
 tempfile = "3"

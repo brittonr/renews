@@ -671,6 +671,7 @@ pub fn create_minimal_config() -> Config {
         runtime_threads: 4,
         logging: Default::default(),
         user_limits: Default::default(),
+        iroh: Default::default(),
     }
 }
 

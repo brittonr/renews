@@ -60,6 +60,42 @@ fn default_true() -> bool {
     true
 }
 
+fn default_iroh_key_path() -> String {
+    "/var/lib/renews/iroh.key".into()
+}
+
+/// iroh transport settings.
+///
+/// The listener itself is compiled in with the `iroh` cargo feature. These
+/// fields are always parsed so a config file can be shared with builds that
+/// do not include that feature.
+#[derive(Debug, Deserialize, Clone)]
+pub struct IrohConfig {
+    /// Accept NNTP connections over iroh.
+    #[serde(default)]
+    pub enabled: bool,
+    /// Path of the 32-byte endpoint secret key. Created on first start.
+    #[serde(default = "default_iroh_key_path")]
+    pub key_path: String,
+    /// Remote endpoint IDs allowed to connect. An empty list rejects every peer.
+    #[serde(default)]
+    pub allowed_peers: Vec<String>,
+    /// When `enabled` and `addr` has no host, bind plain NNTP on 127.0.0.1.
+    #[serde(default = "default_true")]
+    pub localhost_tcp: bool,
+}
+
+impl Default for IrohConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            key_path: default_iroh_key_path(),
+            allowed_peers: Vec::new(),
+            localhost_tcp: true,
+        }
+    }
+}
+
 /// Parse a duration string like "30d", "1h", "30m", "1w" into seconds.
 /// Returns None for empty string (meaning absolute/no period).
 /// Returns Some(seconds) for valid duration strings.
@@ -355,6 +391,10 @@ pub struct Config {
     /// Default user limits configuration
     #[serde(default)]
     pub user_limits: UserLimitsConfig,
+
+    /// iroh (QUIC) listener. Requires the `iroh` cargo feature to take effect.
+    #[serde(default)]
+    pub iroh: IrohConfig,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -638,6 +678,9 @@ See 'examples/config.toml' for a valid configuration example."
         self.allow_auth_insecure_connections = other.allow_auth_insecure_connections;
         self.allow_anonymous_posting = other.allow_anonymous_posting;
         self.user_limits = other.user_limits;
+        // Allowlist updates apply to new iroh connections. The key path and
+        // whether the listener is running stay as they were at startup.
+        self.iroh.allowed_peers = other.iroh.allowed_peers;
     }
 }
 
@@ -818,6 +861,37 @@ mod tests {
         config1.update_runtime(config2);
         assert_eq!(config1.pgp_key_servers.len(), 1);
         assert!(config1.pgp_key_servers[0].contains("updated.example.com"));
+    }
+
+    #[test]
+    fn test_iroh_config_defaults_and_allowlist() {
+        let config: Config = toml::from_str(
+            r#"
+            addr = ":119"
+            site_name = "test.com"
+            "#,
+        )
+        .unwrap();
+        assert!(!config.iroh.enabled);
+        assert!(config.iroh.localhost_tcp);
+        assert!(config.iroh.allowed_peers.is_empty());
+        assert_eq!(config.iroh.key_path, "/var/lib/renews/iroh.key");
+
+        let config: Config = toml::from_str(
+            r#"
+            addr = ":119"
+            [iroh]
+            enabled = true
+            key_path = "/tmp/iroh.key"
+            allowed_peers = ["abcd"]
+            localhost_tcp = false
+            "#,
+        )
+        .unwrap();
+        assert!(config.iroh.enabled);
+        assert!(!config.iroh.localhost_tcp);
+        assert_eq!(config.iroh.allowed_peers, vec!["abcd".to_string()]);
+        assert_eq!(config.iroh.key_path, "/tmp/iroh.key");
     }
 
     #[test]

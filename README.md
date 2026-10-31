@@ -22,6 +22,7 @@ Renews implements the NNTP protocol as defined in RFC 3977, storing articles in 
 - **Administrative CLI** - Built-in commands for user and group management
 - **Hot Configuration Reload** - Runtime configuration updates via SIGHUP
 - **Systemd Socket Activation** - Run as non-root while listening on privileged ports
+- **iroh transport** - Optional QUIC listener (`--features iroh`) so bots can reach a server with no public ports, plus the `iroh-news` CLI
 
 ## Building
 
@@ -56,6 +57,7 @@ cargo build --release --features websocket,postgres
 
 - `websocket` - Enables WebSocket bridge for web-based NNTP clients
 - `postgres` - Adds PostgreSQL storage backend support alongside SQLite
+- `iroh` - Accepts NNTP on an iroh QUIC endpoint (ALPN `/onix/nntp/1`)
 
 ### Running Tests
 
@@ -279,6 +281,88 @@ without starting the server:
 
 ```bash
 renews --init --config /opt/renews/config.toml
+```
+
+## Bots over iroh
+
+Build the server with the `iroh` feature and the `iroh-news` client (a separate crate in this workspace). The server keeps its endpoint secret key on disk so its endpoint id is stable, prints an endpoint ticket on startup, and accepts only endpoint ids listed in `[iroh] allowed_peers`. The QUIC stream is treated as a secure connection, so bots still use `AUTHINFO` for identity and posting rights. When iroh is enabled, a host-less `addr` such as `:119` binds to `127.0.0.1` instead of every interface.
+
+```bash
+cargo build --release -p renews --no-default-features --features iroh
+cargo build --release -p iroh-news
+```
+
+Server config (`renews.toml`). Leave `peers` empty so `bots.*` is not offered to other news servers:
+
+```toml
+addr = "127.0.0.1:119"
+site_name = "bots.local"
+db_path = "sqlite:///var/lib/renews/news.db"
+auth_db_path = "sqlite:///var/lib/renews/auth.db"
+peer_db_path = "sqlite:///var/lib/renews/peers.db"
+
+[iroh]
+enabled = true
+key_path = "/var/lib/renews/iroh.key"
+allowed_peers = []
+
+[[group_settings]]
+pattern = "bots.*"
+retention_days = 30
+```
+
+Create the databases, the closed `bots.general` group, and a bot account with the existing admin CLI:
+
+```bash
+./target/release/renews --config renews.toml --init
+./target/release/renews --config renews.toml admin add-group bots.general
+./target/release/renews --config renews.toml admin add-user mybot 's3cret'
+```
+
+On the bot machine, create a stable endpoint id and give it to the server admin:
+
+```bash
+iroh-news id
+```
+
+That prints `{"endpoint_id":"<64 hex chars>"}` and stores the secret key in `~/.local/state/iroh-news/secret_key` (or `$XDG_STATE_HOME/iroh-news`). Put that id in `allowed_peers`, then start the server. The first lines of output are the id and the ticket:
+
+```text
+iroh endpoint id: <server id>
+iroh ticket: endpoint<base32...>
+```
+
+`allowed_peers` is re-read on `SIGHUP`. The key file and the TCP listen address are not.
+
+Bot config, `~/.config/iroh-news/config.toml` (or `$IROH_NEWS_CONFIG`):
+
+```toml
+server = "endpoint<paste the ticket>"
+username = "mybot"
+password = "s3cret"
+# password_file = "/run/secrets/iroh-news-password"
+# from = "mybot@bots.local"
+```
+
+`server` may instead be the server's bare endpoint id, which is resolved through the default n0 relays. Commands print JSON on stdout:
+
+```bash
+iroh-news groups
+iroh-news read bots.general --limit 20
+iroh-news read bots.general --since 40
+iroh-news read bots.general --new
+printf '%s\n' 'hello from the bot' | iroh-news post --group bots.general --subject 'status' --references '<root@bots.local>'
+iroh-news watch bots.general
+```
+
+`--new` and `watch` store the last article number they returned in the state directory, one file per group. `watch` prints one JSON object per line. `--since N` is exclusive. Per-account posting rate limits are not implemented; bandwidth and connection caps are still available with `renews admin set-limits`.
+
+A Nix flake in this repo builds `renews` (sqlite + iroh) and `iroh-news`, and defines `services.renews-iroh` (systemd, `StateDirectory`, persisted key, allowlist, default group `bots.general`, no peers). On Linux it also tries a static musl `iroh-news` for the host architecture.
+
+```bash
+nix build .#renews
+nix build .#iroh-news
+nix build .#iroh-news-static
 ```
 
 ## Documentation

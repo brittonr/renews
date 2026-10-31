@@ -178,12 +178,15 @@ impl Server {
 
     /// Start TCP listener task
     async fn start_tcp_listener(&self) -> ServerResult<tokio::task::JoinHandle<()>> {
-        let addr_config = {
+        let (addr_config, localhost_default) = {
             let cfg_guard = self.components.config.read().await;
-            cfg_guard.addr.clone()
+            // iroh deployments have no public ports. A host-less `addr` such as
+            // `:119` binds to localhost unless the operator opts out.
+            let localhost_default = cfg_guard.iroh.enabled && cfg_guard.iroh.localhost_tcp;
+            (cfg_guard.addr.clone(), localhost_default)
         };
 
-        let listener = get_listener(&addr_config).await?;
+        let listener = get_listener(&addr_config, localhost_default).await?;
 
         // ...existing code...
         let storage = self.components.storage.clone();
@@ -230,7 +233,7 @@ impl Server {
             return Ok(None);
         };
 
-        let tls_listener = get_listener(tls_addr_raw).await?;
+        let tls_listener = get_listener(tls_addr_raw, false).await?;
         let acceptor = TlsAcceptor::from(Arc::new(load_tls_config(cert, key)?));
         *self.config_manager.tls_acceptor.write().await = Some(acceptor.clone());
 
@@ -386,6 +389,10 @@ impl Server {
         let _tcp_handle = self.start_tcp_listener().await?;
         let _tls_handle = self.start_tls_listener().await?;
         let _ws_handle = self.start_websocket_bridge().await?;
+        #[cfg(feature = "iroh")]
+        let iroh_server = self.start_iroh_listener().await?;
+        #[cfg(not(feature = "iroh"))]
+        self.warn_if_iroh_configured().await;
         let _retention_handle = self.start_retention_cleanup().await?;
         let _config_handle = self.start_config_reload_handler(cfg_path).await?;
         let _usage_handle = self.start_usage_persistence().await?;
@@ -439,8 +446,69 @@ impl Server {
             info!("All connections closed gracefully");
         }
 
+        #[cfg(feature = "iroh")]
+        if let Some(iroh_server) = iroh_server
+            && let Err(err) = iroh_server.shutdown().await
+        {
+            warn!(error = %err, "iroh shutdown failed");
+        }
+
         info!("Shutdown complete");
         Ok(())
+    }
+
+    /// Start the iroh listener when `[iroh] enabled` is set.
+    #[cfg(feature = "iroh")]
+    async fn start_iroh_listener(&self) -> ServerResult<Option<crate::iroh::IrohServer>> {
+        let (enabled, key_path, allowed_peers) = {
+            let cfg = self.components.config.read().await;
+            (
+                cfg.iroh.enabled,
+                cfg.iroh.key_path.clone(),
+                cfg.iroh.allowed_peers.clone(),
+            )
+        };
+        if !enabled {
+            return Ok(None);
+        }
+
+        for peer in &allowed_peers {
+            if peer.parse::<iroh::EndpointId>().is_err() {
+                warn!("ignoring iroh allowlist entry that is not an endpoint id: {peer}");
+            }
+        }
+        if allowed_peers.is_empty() {
+            warn!("iroh allowlist is empty; every iroh peer will be rejected");
+        }
+
+        let secret_key = crate::iroh::load_or_create_secret_key(std::path::Path::new(&key_path))?;
+        let parts = crate::iroh::IrohParts {
+            storage: self.components.storage.clone(),
+            auth: self.components.auth.clone(),
+            config: self.components.config.clone(),
+            queue: self.components.queue.clone(),
+            usage_tracker: self.components.usage_tracker.clone(),
+        };
+        let server = crate::iroh::serve(
+            parts,
+            crate::iroh::IrohBind {
+                secret_key,
+                relay_mode: iroh::endpoint::RelayMode::Default,
+                wait_for_relay: true,
+                bind_addr: None,
+            },
+        )
+        .await?;
+        Ok(Some(server))
+    }
+
+    #[cfg(not(feature = "iroh"))]
+    async fn warn_if_iroh_configured(&self) {
+        if self.components.config.read().await.iroh.enabled {
+            warn!(
+                "iroh.enabled is set, but this binary was built without the `iroh` cargo feature"
+            );
+        }
     }
 }
 
@@ -697,13 +765,23 @@ Please verify that your certificate and key files are correct and match each oth
 ///
 /// # Returns
 /// A properly formatted address string suitable for binding
-fn listen_addr(raw: &str) -> String {
+fn listen_addr(raw: &str, localhost_default: bool) -> String {
     if raw.parse::<SocketAddr>().is_ok() {
         raw.to_string()
     } else if let Some(port) = raw.strip_prefix(':') {
-        format!("0.0.0.0:{port}")
+        let host = if localhost_default {
+            "127.0.0.1"
+        } else {
+            "0.0.0.0"
+        };
+        format!("{host}:{port}")
     } else {
-        format!("0.0.0.0:{raw}")
+        let host = if localhost_default {
+            "127.0.0.1"
+        } else {
+            "0.0.0.0"
+        };
+        format!("{host}:{raw}")
     }
 }
 
@@ -714,7 +792,7 @@ fn listen_addr(raw: &str) -> String {
 ///
 /// # Returns
 /// A TcpListener bound to the specified address or systemd socket
-async fn get_listener(addr_config: &str) -> ServerResult<TcpListener> {
+async fn get_listener(addr_config: &str, localhost_default: bool) -> ServerResult<TcpListener> {
     // First check for systemd:// URLs
     if addr_config.starts_with("systemd://") {
         match addr_config.parse::<systemd_socket::SocketAddr>() {
@@ -757,7 +835,7 @@ You can use 'systemd://socket_name' format for systemd socket activation."
         }
     } else {
         // For regular addresses, use our own parsing logic
-        let addr = listen_addr(addr_config);
+        let addr = listen_addr(addr_config, localhost_default);
         info!("listening on {addr}");
         match TcpListener::bind(&addr).await {
             Ok(listener) => Ok(listener),
@@ -846,4 +924,18 @@ async fn handle_config_reload_with_managers(
     peer_manager.update_tasks(&new_cfg, storage).await?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::listen_addr;
+
+    #[test]
+    fn hostless_addr_binds_localhost_for_iroh() {
+        assert_eq!(listen_addr(":119", true), "127.0.0.1:119");
+        assert_eq!(listen_addr("119", true), "127.0.0.1:119");
+        assert_eq!(listen_addr(":119", false), "0.0.0.0:119");
+        assert_eq!(listen_addr("0.0.0.0:119", true), "0.0.0.0:119");
+        assert_eq!(listen_addr("127.0.0.1:1119", false), "127.0.0.1:1119");
+    }
 }

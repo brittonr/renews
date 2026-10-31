@@ -47,6 +47,7 @@ async fn setup_queue_enabled_server() -> (std::net::SocketAddr, Arc<dyn Storage>
         allow_anonymous_posting: false,
         logging: Default::default(),
         user_limits: Default::default(),
+        iroh: Default::default(),
     };
 
     // Since we can't easily test with TLS in this setup, we'll create a simplified server
