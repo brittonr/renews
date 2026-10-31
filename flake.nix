@@ -36,7 +36,16 @@
           ];
         };
         craneLib = (crane.mkLib pkgs).overrideToolchain rustToolchain;
-        src = craneLib.cleanCargoSource ./.;
+        # cleanCargoSource keeps only Rust and TOML. sqlx::migrate! embeds the
+        # .sql files, and the server tests embed the admin PGP keys.
+        src = pkgs.lib.cleanSourceWith {
+          src = pkgs.lib.cleanSource ./.;
+          filter =
+            path: type:
+            (craneLib.filterCargoSources path type)
+            || pkgs.lib.hasSuffix ".sql" (baseNameOf path)
+            || pkgs.lib.hasSuffix ".asc" (baseNameOf path);
+        };
 
         commonArgs = {
           inherit src;
