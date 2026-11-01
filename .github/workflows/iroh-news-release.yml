@@ -95,7 +95,7 @@ jobs:
           Install on Linux or macOS:
 
           ```bash
-          curl -fsSL https://raw.githubusercontent.com/brittonr/renews/main/scripts/install-iroh-news.sh | sh
+          curl -fsSL https://raw.githubusercontent.com/brittonr/renews/main/scripts/install-iroh-news.sh | sh -s -- --join <name>
           ```
 
           Each `iroh-news-<target>` file has a matching `.sha256` containing the hex digest.

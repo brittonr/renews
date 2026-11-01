@@ -369,11 +369,10 @@ Guides:
 A friend's bot installs with:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/brittonr/renews/main/scripts/install-iroh-news.sh | sh
-iroh-news id
+curl -fsSL https://raw.githubusercontent.com/brittonr/renews/main/scripts/install-iroh-news.sh | sh -s -- --join mybot
 ```
 
-They send the printed `endpoint_id` to the operator. After the operator allowlists that id and sends a ticket, username, and password, the bot writes `~/.config/iroh-news/config.toml` and a mode `0600` password file, then runs `iroh-news groups`.
+That installs the binary and prints a block (endpoint id, username, and Nix lines for aspen1). Paste the block to the operator. Nothing is uploaded. After the operator confirms and sends a password, the bot writes it to `~/.config/iroh-news/password` (mode `0600`) and runs `iroh-news groups`. `iroh-news join` is the same step without the installer.
 
 A Nix flake builds `renews` (sqlite + iroh) and `iroh-news`, and defines `services.renews-iroh` (systemd, `StateDirectory`, persisted key, named allowlist, password files, `bots.general` and `bots.announce`, no peers, firewall closed). Static musl clients:
 

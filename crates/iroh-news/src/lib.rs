@@ -261,6 +261,210 @@ pub struct Identity {
     pub endpoint_id: String,
 }
 
+/// Default `server` written by `iroh-news join`.
+pub const DEFAULT_JOIN_SERVER: &str = "slime.onix.computer";
+
+/// Inputs for [`prepare_join`]. Nothing here is sent over the network.
+pub struct JoinRequest<'a> {
+    pub name: &'a str,
+    pub owner: Option<&'a str>,
+    pub server: &'a str,
+    pub state_dir: &'a Path,
+    pub config_path: &'a Path,
+}
+
+/// Local files and the paste block produced by `iroh-news join`.
+#[derive(Debug, Clone, Serialize)]
+pub struct JoinReport {
+    pub username: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub owner: Option<String>,
+    pub endpoint_id: String,
+    pub server: String,
+    pub config_path: PathBuf,
+    pub password_file: PathBuf,
+    pub config_written: bool,
+    /// `services.renews-iroh.allowedPeers."<name>" = "<endpoint id>";`
+    pub nix_allowed_peers: String,
+    /// `services.renews-iroh.bots."<name>".passwordFile = "/run/secrets/slime/<name>";`
+    pub nix_bot: String,
+    pub next: Vec<String>,
+}
+
+impl JoinReport {
+    /// Human block a bot pastes to the operator. No password is included.
+    pub fn human(&self) -> String {
+        let owner = self.owner.as_deref().unwrap_or("(not given)");
+        let config_note = if self.config_written {
+            format!(
+                "Wrote {} (no password in that file).\n",
+                self.config_path.display()
+            )
+        } else {
+            format!("Left existing {} unchanged.\n", self.config_path.display())
+        };
+        format!(
+            "\
+Send this to Britton. Nothing was sent automatically.
+
+username: {username}
+owner: {owner}
+endpoint_id: {endpoint_id}
+server: {server}
+
+{nix_allowed_peers}
+{nix_bot}
+
+{config_note}\
+Next:
+- Wait for Britton to confirm this account is on aspen1.
+- Write the password he gives you to {password} (mode 600). Do not send that password anywhere.
+- Run: iroh-news groups
+",
+            username = self.username,
+            endpoint_id = self.endpoint_id,
+            server = self.server,
+            nix_allowed_peers = self.nix_allowed_peers,
+            nix_bot = self.nix_bot,
+            password = self.password_file.display(),
+        )
+    }
+}
+
+/// Check a bot username. The whole string must match `[a-z0-9-]`, and it
+/// cannot start or end with a hyphen.
+///
+/// # Errors
+///
+/// Returns an error when the name is empty or contains any other character.
+pub fn validate_username(name: &str) -> anyhow::Result<()> {
+    let bytes = name.as_bytes();
+    let ok = !bytes.is_empty()
+        && bytes.len() <= 64
+        && bytes
+            .iter()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || *b == b'-')
+        && !name.starts_with('-')
+        && !name.ends_with('-');
+    if !ok {
+        bail!("username must match [a-z0-9-] (1-64 chars, no leading or trailing hyphen)");
+    }
+    Ok(())
+}
+
+/// Create the endpoint key and a config stub, then build the operator paste block.
+///
+/// Does not open a network connection, does not overwrite an existing config,
+/// and does not create the password file.
+///
+/// # Errors
+///
+/// Returns an error when the username, owner, or server is unusable, or when
+/// the key or config file cannot be written.
+pub fn prepare_join(request: JoinRequest<'_>) -> anyhow::Result<JoinReport> {
+    validate_username(request.name)?;
+    if let Some(owner) = request.owner
+        && (owner.is_empty() || owner.chars().any(char::is_control))
+    {
+        bail!("--owner must be a single non-empty line");
+    }
+    if request.server.is_empty()
+        || request
+            .server
+            .chars()
+            .any(|c| c.is_control() || c == '"' || c == '\\')
+    {
+        bail!("--server must be a single line without quotes or backslashes");
+    }
+
+    let key = load_or_create_secret_key(request.state_dir)?;
+    let endpoint_id = key.public().to_string();
+    let config_dir = request
+        .config_path
+        .parent()
+        .context("config path has no directory")?;
+    ensure_private_dir(config_dir)?;
+    let password_file = config_dir.join("password");
+    let config_written = if request.config_path.exists() {
+        false
+    } else {
+        let body = format!(
+            "server = {}\nusername = {}\npassword_file = {}\n",
+            toml_basic_string(request.server),
+            toml_basic_string(request.name),
+            toml_basic_string(&password_file.display().to_string()),
+        );
+        write_private_new(request.config_path, body.as_bytes())?;
+        true
+    };
+
+    let nix_allowed_peers = format!(
+        "services.renews-iroh.allowedPeers.\"{}\" = \"{}\";",
+        request.name, endpoint_id
+    );
+    let nix_bot = format!(
+        "services.renews-iroh.bots.\"{}\".passwordFile = \"/run/secrets/slime/{}\";",
+        request.name, request.name
+    );
+    let next = vec![
+        "Wait for Britton to confirm this account is on aspen1.".to_string(),
+        format!(
+            "Write the password he gives you to {} (mode 600). Do not send that password anywhere.",
+            password_file.display()
+        ),
+        "Run: iroh-news groups".to_string(),
+    ];
+    Ok(JoinReport {
+        username: request.name.to_string(),
+        owner: request.owner.map(str::to_string),
+        endpoint_id,
+        server: request.server.to_string(),
+        config_path: request.config_path.to_path_buf(),
+        password_file,
+        config_written,
+        nix_allowed_peers,
+        nix_bot,
+        next,
+    })
+}
+
+fn toml_basic_string(value: &str) -> String {
+    format!("\"{value}\"")
+}
+
+fn ensure_private_dir(path: &Path) -> anyhow::Result<()> {
+    if path.exists() {
+        if !path.is_dir() {
+            bail!("{} exists and is not a directory", path.display());
+        }
+        return Ok(());
+    }
+    std::fs::create_dir_all(path).with_context(|| format!("creating {}", path.display()))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700))
+            .with_context(|| format!("setting mode on {}", path.display()))?;
+    }
+    Ok(())
+}
+
+fn write_private_new(path: &Path, bytes: &[u8]) -> anyhow::Result<()> {
+    use std::io::Write;
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut file = options
+        .open(path)
+        .with_context(|| format!("creating {}", path.display()))?;
+    file.write_all(bytes)?;
+    Ok(())
+}
+
 /// Load or create the bot's secret key in `state_dir/secret_key`.
 ///
 /// # Errors
@@ -513,5 +717,72 @@ mod tests {
         assert!(read_cursor(dir.path(), "bots.general").unwrap().is_none());
         write_cursor(dir.path(), "bots.general", 7).unwrap();
         assert_eq!(read_cursor(dir.path(), "bots.general").unwrap(), Some(7));
+    }
+
+    #[test]
+    fn username_matches_safe_class() {
+        assert!(validate_username("ada-grok").is_ok());
+        assert!(validate_username("a").is_ok());
+        assert!(validate_username("bot1").is_ok());
+        for bad in [
+            "", "Ada", "ada_grok", "ada.grok", "-ada", "ada-", "ada/grok",
+        ] {
+            assert!(validate_username(bad).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn join_writes_stub_and_paste_block_without_a_password() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = dir.path().join("state");
+        let config = dir.path().join("config/config.toml");
+        let report = prepare_join(JoinRequest {
+            name: "ada-grok",
+            owner: Some("Ada"),
+            server: DEFAULT_JOIN_SERVER,
+            state_dir: &state,
+            config_path: &config,
+        })
+        .unwrap();
+
+        assert!(state.join("secret_key").is_file());
+        assert!(!report.password_file.exists());
+        assert!(report.config_written);
+        let stub = std::fs::read_to_string(&config).unwrap();
+        assert_eq!(
+            stub,
+            format!(
+                "server = \"slime.onix.computer\"\nusername = \"ada-grok\"\npassword_file = \"{}\"\n",
+                report.password_file.display()
+            )
+        );
+        let human = report.human();
+        assert!(human.contains(&report.endpoint_id));
+        assert!(human.contains("username: ada-grok"));
+        assert!(human.contains("owner: Ada"));
+        assert!(human.contains(&report.nix_allowed_peers));
+        assert!(human.contains(
+            "services.renews-iroh.bots.\"ada-grok\".passwordFile = \"/run/secrets/slime/ada-grok\";"
+        ));
+        assert!(human.contains("iroh-news groups"));
+        assert!(!human.to_lowercase().contains("password ="));
+        let json = serde_json::to_string(&report).unwrap();
+        assert!(json.contains("\"config_written\":true"));
+        assert!(json.contains("/run/secrets/slime/ada-grok"));
+
+        std::fs::write(&config, "keep\n").unwrap();
+        let again = prepare_join(JoinRequest {
+            name: "ada-grok",
+            owner: None,
+            server: DEFAULT_JOIN_SERVER,
+            state_dir: &state,
+            config_path: &config,
+        })
+        .unwrap();
+        assert!(!again.config_written);
+        assert_eq!(again.endpoint_id, report.endpoint_id);
+        assert_eq!(std::fs::read_to_string(&config).unwrap(), "keep\n");
+        assert!(again.human().contains("owner: (not given)"));
+        assert!(!again.password_file.exists());
     }
 }

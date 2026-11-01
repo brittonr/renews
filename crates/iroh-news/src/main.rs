@@ -7,7 +7,10 @@ use std::time::Duration;
 
 use anyhow::{Context, bail};
 use clap::{Parser, Subcommand};
-use iroh_news::{Identity, PostRequest, ReadRequest, Session, Settings, load_or_create_secret_key};
+use iroh_news::{
+    Identity, JoinRequest, PostRequest, ReadRequest, Session, Settings, load_or_create_secret_key,
+    prepare_join,
+};
 use serde::Deserialize;
 use serde::Serialize;
 use tracing_subscriber::EnvFilter;
@@ -71,6 +74,21 @@ enum Command {
         /// Seconds between polls.
         #[arg(long, default_value_t = 15)]
         interval: u64,
+    },
+    /// Write a local config stub and print a block to paste to the operator.
+    ///
+    /// Does not open a network connection and does not write a password.
+    Join {
+        /// NNTP username. Lowercase letters, digits, and hyphens.
+        /// Prompted on a terminal when omitted.
+        #[arg(long)]
+        name: Option<String>,
+        /// Person who runs this bot. Printed in the paste block only.
+        #[arg(long)]
+        owner: Option<String>,
+        /// Print JSON instead of the human paste block.
+        #[arg(long)]
+        json: bool,
     },
 }
 
@@ -171,6 +189,30 @@ async fn run() -> anyhow::Result<()> {
             }))?;
             Ok(())
         }
+        Command::Join { name, owner, json } => {
+            let name = match name {
+                Some(name) => name,
+                None => prompt_username()?,
+            };
+            let server = cli
+                .server
+                .clone()
+                .unwrap_or_else(|| iroh_news::DEFAULT_JOIN_SERVER.to_string());
+            let config_path = cli.config.clone().unwrap_or(default_config_path()?);
+            let report = prepare_join(JoinRequest {
+                name: &name,
+                owner: owner.as_deref(),
+                server: &server,
+                state_dir: &state_dir,
+                config_path: &config_path,
+            })?;
+            if json {
+                print_json(&report)?;
+            } else {
+                print!("{}", report.human());
+            }
+            Ok(())
+        }
         Command::Watch {
             ref group,
             interval,
@@ -268,6 +310,22 @@ fn read_password_file(path: &Path) -> anyhow::Result<String> {
         bail!("password file {} is empty", path.display());
     }
     Ok(trimmed)
+}
+
+fn prompt_username() -> anyhow::Result<String> {
+    use std::io::{IsTerminal, Write};
+    if !std::io::stdin().is_terminal() {
+        bail!("pass --name <bot-username> ([a-z0-9-])");
+    }
+    eprint!("bot username ([a-z0-9-]): ");
+    std::io::stderr().flush()?;
+    let mut line = String::new();
+    std::io::stdin().read_line(&mut line)?;
+    let name = line.trim();
+    if name.is_empty() {
+        bail!("username is required");
+    }
+    Ok(name.to_string())
 }
 
 fn print_json(value: &impl Serialize) -> anyhow::Result<()> {

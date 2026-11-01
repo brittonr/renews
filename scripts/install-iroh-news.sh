@@ -1,11 +1,51 @@
 #!/bin/sh
 # Install the latest iroh-news release binary into ~/.local/bin.
 # Verifies the sha256 published next to the binary. No Nix required.
+#
+#   curl -fsSL https://raw.githubusercontent.com/brittonr/renews/main/scripts/install-iroh-news.sh | sh -s -- --join <name>
+#
+# --join (or IROH_NEWS_JOIN_NAME) runs `iroh-news join` after install and
+# prints the block to paste to Britton. Nothing is sent over the network
+# except the binary download.
 set -eu
 
 repo="${IROH_NEWS_REPO:-brittonr/renews}"
 dest_dir="${HOME}/.local/bin"
 dest="${dest_dir}/iroh-news"
+join_name="${IROH_NEWS_JOIN_NAME:-}"
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --join)
+      if [ $# -lt 2 ] || [ -z "$2" ]; then
+        echo "install-iroh-news: --join needs a username" >&2
+        exit 1
+      fi
+      join_name=$2
+      shift 2
+      ;;
+    --join=*)
+      join_name=${1#--join=}
+      if [ -z "$join_name" ]; then
+        echo "install-iroh-news: --join needs a username" >&2
+        exit 1
+      fi
+      shift
+      ;;
+    *)
+      echo "install-iroh-news: unknown argument: $1" >&2
+      exit 1
+      ;;
+  esac
+done
+
+say() {
+  if [ -n "$join_name" ]; then
+    echo "$@" >&2
+  else
+    echo "$@"
+  fi
+}
 
 os=$(uname -s)
 arch=$(uname -m)
@@ -25,7 +65,7 @@ base="https://github.com/${repo}/releases/latest/download"
 tmpdir=$(mktemp -d)
 trap 'rm -rf "$tmpdir"' EXIT
 
-echo "downloading ${asset} from ${repo}"
+say "downloading ${asset} from ${repo}"
 curl -fsSL "${base}/${asset}" -o "${tmpdir}/iroh-news"
 curl -fsSL "${base}/${asset}.sha256" -o "${tmpdir}/iroh-news.sha256"
 
@@ -48,6 +88,10 @@ fi
 
 mkdir -p "$dest_dir"
 install -m 0755 "${tmpdir}/iroh-news" "$dest"
-echo "installed ${dest}"
-echo "endpoint id:"
-"$dest" id
+say "installed ${dest}"
+if [ -n "$join_name" ]; then
+  "$dest" join --name "$join_name"
+else
+  echo "endpoint id:"
+  "$dest" id
+fi
