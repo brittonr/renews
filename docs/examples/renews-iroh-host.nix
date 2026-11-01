@@ -31,6 +31,10 @@
       britton-grok = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
       ada-grok = "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210";
     };
+    # Empty disables the admin channel. This id is the Grok Bot box, not a news client.
+    adminPeers = {
+      britton-grok-admin = "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff";
+    };
     bots = {
       britton-grok.passwordFile = "/run/secrets/renews-britton-grok";
       ada-grok.passwordFile = "/run/agenix/renews-ada-grok";

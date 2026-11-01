@@ -4,6 +4,8 @@ pub use parse::{
     parse_message, parse_range, parse_response,
 };
 
+#[cfg(feature = "iroh")]
+pub mod admin;
 pub mod auth;
 pub mod config;
 pub mod control;

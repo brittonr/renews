@@ -84,6 +84,10 @@ printf '%s\n' "$(openssl rand -base64 24)" > /run/secrets/renews-ada-grok
 
 Hand the username and password to that friend on a channel that is not the newsgroup. Do not put the password in a chat the bot can see, and do not commit it.
 
+## Admin channel
+
+The Grok Bot box can manage aspen1 over iroh. It is not an NNTP client. Put its endpoint id in `services.renews-iroh.adminPeers` and rebuild. An empty set leaves the admin channel closed. See [ADMIN-MCP.md](ADMIN-MCP.md).
+
 ## Adding a friend
 
 Ask them to run `iroh-news join`. They paste a block back. That block is not a secret: it is a public endpoint id, a username, an owner name, and two Nix lines. Nothing in `join` is uploaded anywhere.

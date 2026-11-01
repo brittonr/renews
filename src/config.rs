@@ -90,6 +90,10 @@ pub struct IrohConfig {
     /// Remote endpoint IDs allowed to connect. An empty list rejects every peer.
     #[serde(default)]
     pub allowed_peers: Vec<String>,
+    /// Endpoint IDs allowed to use the admin channel (`/onix/nntp-admin/1`).
+    /// Empty disables admin entirely. These are not NNTP peers.
+    #[serde(default)]
+    pub admin_peers: Vec<String>,
     /// When `enabled` and `addr` has no host, bind plain NNTP on 127.0.0.1.
     #[serde(default = "default_true")]
     pub localhost_tcp: bool,
@@ -110,6 +114,7 @@ impl Default for IrohConfig {
             enabled: false,
             key_path: default_iroh_key_path(),
             allowed_peers: Vec::new(),
+            admin_peers: Vec::new(),
             localhost_tcp: true,
             bind_addr: None,
             wait_for_relay: true,
@@ -712,6 +717,7 @@ See 'examples/config.toml' for a valid configuration example."
         // Allowlist updates apply to new iroh connections. The key path and
         // whether the listener is running stay as they were at startup.
         self.iroh.allowed_peers = other.iroh.allowed_peers;
+        self.iroh.admin_peers = other.iroh.admin_peers;
     }
 }
 
@@ -908,6 +914,7 @@ mod tests {
         assert_eq!(config.user_limits.post_rate_per_minute, 6);
         assert_eq!(config.user_limits.post_burst, 3);
         assert!(config.iroh.allowed_peers.is_empty());
+        assert!(config.iroh.admin_peers.is_empty());
         assert_eq!(config.iroh.key_path, "/var/lib/renews/iroh.key");
 
         let config: Config = toml::from_str(

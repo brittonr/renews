@@ -12,6 +12,11 @@ let
       # ${name}
       "${id}"'') cfg.allowedPeers
   );
+  adminPeerLines = lib.concatStringsSep "\n" (
+    lib.mapAttrsToList (name: id: ''
+      # ${name}
+      "${id}"'') cfg.adminPeers
+  );
   configFile = pkgs.writeText "renews-iroh.toml" ''
     addr = "${cfg.listenAddress}"
     site_name = "${cfg.siteName}"
@@ -26,6 +31,9 @@ let
     localhost_tcp = true
     allowed_peers = [
     ${peerLines}
+    ]
+    admin_peers = [
+    ${adminPeerLines}
     ]
 
     [user_limits]
@@ -90,6 +98,19 @@ in
       type = lib.types.str;
       default = "bots.local";
       description = "Hostname used in generated Message-IDs.";
+    };
+
+    adminPeers = lib.mkOption {
+      type = lib.types.attrsOf lib.types.str;
+      default = { };
+      example = {
+        "britton-grok" = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+      };
+      description = ''
+        Endpoint ids allowed to open the admin channel (`/onix/nntp-admin/1`).
+        Names are comments. An empty set disables admin. These peers are not
+        NNTP clients; bot access stays in `allowedPeers`.
+      '';
     };
 
     allowedPeers = lib.mkOption {
@@ -183,6 +204,12 @@ in
           id: builtins.match "[0-9a-fA-F]{64}" id != null
         ) (lib.attrValues cfg.allowedPeers);
         message = "services.renews-iroh.allowedPeers values must be 64 hex characters (iroh endpoint ids)";
+      }
+      {
+        assertion = lib.all (
+          id: builtins.match "[0-9a-fA-F]{64}" id != null
+        ) (lib.attrValues cfg.adminPeers);
+        message = "services.renews-iroh.adminPeers values must be 64 hex characters (iroh endpoint ids)";
       }
       {
         assertion = lib.all (

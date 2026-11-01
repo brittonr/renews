@@ -104,6 +104,17 @@ impl AuthProvider for SqliteAuth {
         Ok(())
     }
 
+    async fn list_usernames(&self) -> Result<Vec<String>> {
+        let rows = sqlx::query("SELECT username FROM users ORDER BY username")
+            .fetch_all(&self.pool)
+            .await?;
+        let mut names = Vec::with_capacity(rows.len());
+        for row in rows {
+            names.push(row.try_get("username")?);
+        }
+        Ok(names)
+    }
+
     async fn remove_user(&self, username: &str) -> Result<()> {
         sqlx::query("DELETE FROM users WHERE username = ?")
             .bind(username)

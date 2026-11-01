@@ -7,9 +7,10 @@ use std::time::Duration;
 
 use anyhow::{Context, bail};
 use clap::{Parser, Subcommand};
+use iroh_news::mcp::{McpConfig, serve};
 use iroh_news::{
-    Identity, JoinRequest, PostRequest, ReadRequest, Session, Settings, load_or_create_secret_key,
-    prepare_join,
+    Identity, JoinRequest, PostRequest, ReadRequest, Session, Settings, admin_call,
+    load_or_create_secret_key, prepare_join, stash_password,
 };
 use serde::Deserialize;
 use serde::Serialize;
@@ -90,6 +91,87 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
+    /// stdio MCP server for a local assistant. Does not listen on a port.
+    Mcp {
+        /// Also expose admin tools. Requires this endpoint id in aspen1 `adminPeers`.
+        #[arg(long)]
+        admin: bool,
+    },
+    /// Call the admin channel. Same operations as the admin MCP tools.
+    Admin {
+        #[command(subcommand)]
+        op: AdminOp,
+    },
+}
+
+#[derive(Subcommand)]
+enum AdminOp {
+    Status,
+    DiscoveryTxt {
+        name: String,
+    },
+    ListPeers,
+    AddPeer {
+        #[arg(long)]
+        endpoint_id: String,
+        #[arg(long)]
+        label: String,
+    },
+    RemovePeer {
+        #[arg(long)]
+        endpoint_id: String,
+        /// Required. Nix allowedPeers entries cannot be removed this way.
+        #[arg(long)]
+        confirm: bool,
+    },
+    ListAccounts,
+    CreateAccount {
+        #[arg(long)]
+        username: String,
+    },
+    RotatePassword {
+        #[arg(long)]
+        username: String,
+    },
+    DisableAccount {
+        #[arg(long)]
+        username: String,
+        #[arg(long)]
+        confirm: bool,
+    },
+    DeleteAccount {
+        #[arg(long)]
+        username: String,
+        #[arg(long)]
+        confirm: bool,
+    },
+    ListGroups,
+    CreateGroup {
+        #[arg(long)]
+        name: String,
+        #[arg(long, default_value = "")]
+        description: String,
+        #[arg(long)]
+        moderated: bool,
+    },
+    Recent {
+        #[arg(long)]
+        group: String,
+        #[arg(long)]
+        limit: Option<u64>,
+    },
+    DeleteArticle {
+        #[arg(long)]
+        message_id: String,
+        #[arg(long)]
+        confirm: bool,
+    },
+    RateLimits,
+    /// Read a `iroh-news join --json` object from a file, or stdin when omitted.
+    ApproveJoin {
+        #[arg(long)]
+        file: Option<PathBuf>,
+    },
 }
 
 #[derive(Debug, Deserialize)]
@@ -106,6 +188,12 @@ struct FileConfig {
     password_file: Option<PathBuf>,
     #[serde(default)]
     from: Option<String>,
+    /// Expose admin MCP tools. The endpoint id must be in aspen1 `adminPeers`.
+    #[serde(default)]
+    admin: bool,
+    /// Directory for generated passwords. Defaults to `$state_dir/secrets`.
+    #[serde(default)]
+    secrets_dir: Option<PathBuf>,
 }
 
 #[tokio::main]
@@ -213,6 +301,71 @@ async fn run() -> anyhow::Result<()> {
             }
             Ok(())
         }
+        Command::Mcp { admin } => {
+            let file = read_file_config(&cli)?;
+            let admin = admin || file.as_ref().is_some_and(|cfg| cfg.admin);
+            let server = cli
+                .server
+                .clone()
+                .or_else(|| std::env::var("IROH_NEWS_SERVER").ok())
+                .or_else(|| file.as_ref().and_then(|cfg| cfg.server.clone()))
+                .context("set --server, IROH_NEWS_SERVER, or server in the config")?;
+            let username = std::env::var("IROH_NEWS_USERNAME")
+                .ok()
+                .or_else(|| file.as_ref().and_then(|cfg| cfg.username.clone()));
+            let password = optional_password(file.as_ref())?;
+            let from = std::env::var("IROH_NEWS_FROM")
+                .ok()
+                .or_else(|| file.as_ref().and_then(|cfg| cfg.from.clone()))
+                .unwrap_or_else(|| {
+                    username
+                        .as_deref()
+                        .map(|name| format!("{name}@bots.local"))
+                        .unwrap_or_else(|| "bot@bots.local".into())
+                });
+            let secrets_dir = file
+                .as_ref()
+                .and_then(|cfg| cfg.secrets_dir.clone())
+                .unwrap_or_else(|| state_dir.join("secrets"));
+            serve(McpConfig {
+                server,
+                state_dir: state_dir.clone(),
+                secret_key: load_or_create_secret_key(&state_dir)?,
+                relays: !cli.no_relays,
+                username,
+                password,
+                from,
+                secrets_dir,
+                admin,
+            })
+            .await
+        }
+        Command::Admin { ref op } => {
+            let file = read_file_config(&cli)?;
+            let server = cli
+                .server
+                .clone()
+                .or_else(|| std::env::var("IROH_NEWS_SERVER").ok())
+                .or_else(|| file.as_ref().and_then(|cfg| cfg.server.clone()))
+                .context("set --server, IROH_NEWS_SERVER, or server in the config")?;
+            let relays = !cli.no_relays;
+            let secrets_dir = file
+                .and_then(|cfg| cfg.secrets_dir)
+                .unwrap_or_else(|| state_dir.join("secrets"));
+            let (op_name, args) = admin_args(op).await?;
+            let mut result = admin_call(
+                &server,
+                &state_dir,
+                load_or_create_secret_key(&state_dir)?,
+                relays,
+                &op_name,
+                args,
+            )
+            .await?;
+            stash_password(&mut result, &secrets_dir)?;
+            print_json(&result)?;
+            Ok(())
+        }
         Command::Watch {
             ref group,
             interval,
@@ -310,6 +463,114 @@ fn read_password_file(path: &Path) -> anyhow::Result<String> {
         bail!("password file {} is empty", path.display());
     }
     Ok(trimmed)
+}
+
+fn read_file_config(cli: &Cli) -> anyhow::Result<Option<FileConfig>> {
+    let path = if let Some(path) = &cli.config {
+        path.clone()
+    } else {
+        default_config_path()?
+    };
+    if !path.exists() {
+        if cli.config.is_some() {
+            bail!("config {} does not exist", path.display());
+        }
+        return Ok(None);
+    }
+    let text = std::fs::read_to_string(&path)
+        .with_context(|| format!("reading config {}", path.display()))?;
+    let file: FileConfig =
+        toml::from_str(&text).with_context(|| format!("parsing config {}", path.display()))?;
+    Ok(Some(file))
+}
+
+fn optional_password(file: Option<&FileConfig>) -> anyhow::Result<Option<String>> {
+    if let Ok(password) = std::env::var("IROH_NEWS_PASSWORD") {
+        return Ok(Some(password));
+    }
+    if let Ok(path) = std::env::var("IROH_NEWS_PASSWORD_FILE") {
+        return Ok(Some(read_password_file(Path::new(&path))?));
+    }
+    if let Some(file) = file {
+        if let Some(path) = &file.password_file
+            && path.exists()
+        {
+            return Ok(Some(read_password_file(path)?));
+        }
+        if let Some(password) = &file.password {
+            return Ok(Some(password.clone()));
+        }
+    }
+    Ok(None)
+}
+
+async fn admin_args(op: &AdminOp) -> anyhow::Result<(String, serde_json::Value)> {
+    use serde_json::json;
+    Ok(match op {
+        AdminOp::Status => ("status".into(), json!({})),
+        AdminOp::DiscoveryTxt { name } => ("discovery_txt".into(), json!({"name": name})),
+        AdminOp::ListPeers => ("list_peers".into(), json!({})),
+        AdminOp::AddPeer { endpoint_id, label } => (
+            "add_peer".into(),
+            json!({"endpoint_id": endpoint_id, "label": label}),
+        ),
+        AdminOp::RemovePeer {
+            endpoint_id,
+            confirm,
+        } => (
+            "remove_peer".into(),
+            json!({"endpoint_id": endpoint_id, "confirm": confirm}),
+        ),
+        AdminOp::ListAccounts => ("list_accounts".into(), json!({})),
+        AdminOp::CreateAccount { username } => {
+            ("create_account".into(), json!({"username": username}))
+        }
+        AdminOp::RotatePassword { username } => {
+            ("rotate_password".into(), json!({"username": username}))
+        }
+        AdminOp::DisableAccount { username, confirm } => (
+            "disable_account".into(),
+            json!({"username": username, "confirm": confirm}),
+        ),
+        AdminOp::DeleteAccount { username, confirm } => (
+            "delete_account".into(),
+            json!({"username": username, "confirm": confirm}),
+        ),
+        AdminOp::ListGroups => ("list_groups".into(), json!({})),
+        AdminOp::CreateGroup {
+            name,
+            description,
+            moderated,
+        } => (
+            "create_group".into(),
+            json!({"name": name, "description": description, "moderated": moderated}),
+        ),
+        AdminOp::Recent { group, limit } => (
+            "recent_articles".into(),
+            json!({"group": group, "limit": limit}),
+        ),
+        AdminOp::DeleteArticle {
+            message_id,
+            confirm,
+        } => (
+            "delete_article".into(),
+            json!({"message_id": message_id, "confirm": confirm}),
+        ),
+        AdminOp::RateLimits => ("rate_limits".into(), json!({})),
+        AdminOp::ApproveJoin { file } => {
+            let text = if let Some(path) = file {
+                std::fs::read_to_string(path)
+                    .with_context(|| format!("reading {}", path.display()))?
+            } else {
+                let mut buf = String::new();
+                tokio::io::AsyncReadExt::read_to_string(&mut tokio::io::stdin(), &mut buf).await?;
+                buf
+            };
+            let block: serde_json::Value =
+                serde_json::from_str(&text).context("join block is not JSON")?;
+            ("approve_join".into(), json!({"block": block}))
+        }
+    })
 }
 
 fn prompt_username() -> anyhow::Result<String> {

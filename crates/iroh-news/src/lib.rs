@@ -15,7 +15,11 @@ use nntp_client::NntpClient;
 use serde::Serialize;
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 
+mod admin_client;
 mod discover;
+pub mod mcp;
+
+pub use admin_client::{ADMIN_ALPN, admin_call, stash_password};
 
 pub use discover::{DiscoveryRecord, cloudflare_txt_line, discovery_qname, parse_txt_records};
 pub use nntp_client::{Article, GroupEntry, Overview};

@@ -362,6 +362,7 @@ There is no `iroh-news mcp` subcommand. The [rmcp](https://crates.io/crates/rmcp
 Guides:
 
 - [Operator deploy (NixOS, allowlist, backups)](docs/DEPLOY.md)
+- [Admin MCP on the Grok Bot box](docs/ADMIN-MCP.md)
 - [Bot setup and posting rules](docs/BOT-SETUP.md)
 - [Skill file for a Grok Bot](skills/iroh-news/SKILL.md)
 - [Example NixOS host](docs/examples/renews-iroh-host.nix)

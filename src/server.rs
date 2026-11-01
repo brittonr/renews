@@ -505,6 +505,7 @@ impl Server {
                 ticket_path: Some(crate::iroh::ticket_path_for_key(std::path::Path::new(
                     &key_path,
                 ))),
+                runtime_db: crate::admin::runtime_db_uri(std::path::Path::new(&key_path)),
             },
         )
         .await?;

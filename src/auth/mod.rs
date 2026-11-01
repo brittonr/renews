@@ -15,6 +15,8 @@ pub trait AuthProvider: Send + Sync {
     ) -> Result<()>;
     async fn update_password(&self, username: &str, new_password: &str) -> Result<()>;
     async fn remove_user(&self, username: &str) -> Result<()>;
+    /// Usernames in the auth database, sorted.
+    async fn list_usernames(&self) -> Result<Vec<String>>;
     async fn verify_user(&self, username: &str, password: &str) -> Result<bool>;
     async fn is_admin(&self, username: &str) -> Result<bool>;
     async fn add_admin(&self, username: &str, key: &str) -> Result<()>;

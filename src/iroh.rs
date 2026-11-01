@@ -53,6 +53,8 @@ pub struct IrohBind {
     /// Bind only this socket. `None` binds every interface.
     /// Tests pass `127.0.0.1:0` so the ticket contains a loopback address.
     pub bind_addr: Option<std::net::SocketAddr>,
+    /// SQLite URI for runtime peers (`iroh-runtime.db`).
+    pub runtime_db: String,
 }
 
 /// A running iroh listener.
@@ -156,14 +158,36 @@ pub async fn serve(parts: IrohParts, bind: IrohBind) -> anyhow::Result<IrohServe
         .await
         .map_err(|err| anyhow::anyhow!("bind iroh endpoint: {err}"))?;
 
-    let handler = NntpProtocol {
-        storage: parts.storage,
-        auth: parts.auth,
-        config: parts.config,
+    let runtime = crate::admin::RuntimeStore::open(&bind.runtime_db).await?;
+    let live = Arc::new(crate::admin::LivePeers::default());
+    let started = std::time::Instant::now();
+    let endpoint_id_for_admin = endpoint.id().to_string();
+    let ticket_slot = Arc::new(std::sync::RwLock::new(String::new()));
+    let nntp = NntpProtocol {
+        storage: parts.storage.clone(),
+        auth: parts.auth.clone(),
+        config: parts.config.clone(),
         queue: parts.queue,
         usage_tracker: parts.usage_tracker,
+        runtime: runtime.clone(),
+        live: live.clone(),
     };
-    let router = Router::builder(endpoint).accept(ALPN, handler).spawn();
+    let admin = crate::admin::AdminProtocol {
+        ctx: crate::admin::AdminContext {
+            storage: parts.storage,
+            auth: parts.auth,
+            config: parts.config,
+            runtime,
+            live,
+            started,
+            endpoint_id: endpoint_id_for_admin,
+            ticket: ticket_slot.clone(),
+        },
+    };
+    let router = Router::builder(endpoint)
+        .accept(ALPN, nntp)
+        .accept(crate::admin::ADMIN_ALPN, admin)
+        .spawn();
 
     // Direct addresses show up shortly after bind. Include them in the ticket
     // even when a relay is not reachable.
@@ -181,6 +205,7 @@ pub async fn serve(parts: IrohParts, bind: IrohBind) -> anyhow::Result<IrohServe
     let addr = router.endpoint().addr();
     let endpoint_id = router.endpoint().id();
     let ticket = EndpointTicket::new(addr).encode_string();
+    *ticket_slot.write().unwrap_or_else(|err| err.into_inner()) = ticket.clone();
     if let Some(path) = &bind.ticket_path {
         write_ticket_file(path, &ticket)?;
     }
@@ -228,6 +253,8 @@ struct NntpProtocol {
     config: Arc<RwLock<Config>>,
     queue: ArticleQueue,
     usage_tracker: Arc<UsageTracker>,
+    runtime: crate::admin::RuntimeStore,
+    live: Arc<crate::admin::LivePeers>,
 }
 
 impl std::fmt::Debug for NntpProtocol {
@@ -239,11 +266,13 @@ impl std::fmt::Debug for NntpProtocol {
 impl NntpProtocol {
     async fn peer_allowed(&self, remote: EndpointId) -> bool {
         let cfg = self.config.read().await;
-        cfg.iroh.allowed_peers.iter().any(|entry| {
-            entry
-                .parse::<EndpointId>()
-                .is_ok_and(|allowed| allowed == remote)
-        })
+        match crate::admin::nntp_peer_allowed(&cfg, &self.runtime, remote).await {
+            Ok(allowed) => allowed,
+            Err(err) => {
+                tracing::warn!(error = %err, "iroh runtime allowlist lookup failed");
+                false
+            }
+        }
     }
 }
 
@@ -267,6 +296,12 @@ impl ProtocolHandler for NntpProtocol {
             return Err(AcceptError::from_err(PeerRejected));
         }
         tracing::info!(endpoint_id = %remote, "accepted iroh peer");
+        let caller = remote.to_string();
+        self.live.nntp.insert(caller.clone());
+        let _session = crate::admin::LiveGuard {
+            set: &self.live.nntp,
+            id: caller,
+        };
 
         // The server opens the stream. `accept_bi` does not resolve until the
         // peer has sent bytes, but NNTP requires the server to send the
