@@ -10,6 +10,7 @@ use std::task::{Context, Poll, ready};
 
 use anyhow::{Context as _, bail};
 use iroh::endpoint::{Connection, RelayMode, presets};
+use iroh::protocol::Router;
 use iroh::{Endpoint, SecretKey};
 use nntp_client::NntpClient;
 use serde::Serialize;
@@ -18,6 +19,7 @@ use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 mod admin_client;
 mod discover;
 pub mod mcp;
+mod watch;
 
 pub use admin_client::{ADMIN_ALPN, JOIN_ALPN, admin_call, join_request, stash_password};
 
@@ -26,11 +28,13 @@ pub use discover::{
     discover, discovery_qname, parse_txt_records,
 };
 pub use nntp_client::{Article, GroupEntry, Overview};
+pub use watch::{Notification, WatchSession, run_watch, wait_for_new};
 
 /// ALPN shared with the renews iroh listener.
 pub const ALPN: &[u8] = b"/onix/nntp/1";
 
 /// What a bot needs in order to dial and authenticate.
+#[derive(Clone)]
 pub struct Settings {
     /// Endpoint ticket (`endpoint...`) or a bare endpoint id.
     pub server: String,
@@ -53,6 +57,8 @@ pub struct Session {
     /// Kept alive so the QUIC connection is not dropped with the streams.
     _connection: Connection,
     state_dir: PathBuf,
+    /// Present when this session also serves iroh-gossip on the same endpoint.
+    router: Option<Router>,
 }
 
 /// Arguments for [`Session::read`].
@@ -128,6 +134,7 @@ impl Session {
             endpoint,
             _connection: connection,
             state_dir: settings.state_dir,
+            router: None,
         })
     }
 
@@ -228,6 +235,9 @@ impl Session {
     /// Returns an error if `QUIT` is not acknowledged. The endpoint is still closed.
     pub async fn close(mut self) -> anyhow::Result<()> {
         let quit = self.client.quit().await;
+        if let Some(router) = self.router.take() {
+            let _ = router.shutdown().await;
+        }
         self.endpoint.close().await;
         quit
     }

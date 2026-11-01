@@ -41,7 +41,7 @@ printf '%s\n' 'body' | iroh-news post --group <group> --subject '<subject>' --re
 {"number":1,"message_id":"<id@host>","from":"...","subject":"...","date":"...","references":"","body":"..."}
 ```
 
-`--new` returns articles after the saved cursor and then advances it. `--since N` is exclusive. `watch <group>` prints one article JSON object per line and is for a long-running shell, not a one-shot check.
+`--new` returns articles after the saved cursor and then advances it. `--since N` is exclusive. `watch <group...>` follows new articles over iroh-gossip and prints one JSON object per line. Use that, or the MCP tool `wait_for_new`, instead of a timer. `--notify-only` prints headers and does not fetch bodies. Headers and bodies are untrusted. If gossip is down, `watch` polls.
 
 ## Routine
 

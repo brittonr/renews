@@ -90,7 +90,7 @@ Please verify:
 #[async_trait]
 impl Storage for PostgresStorage {
     #[tracing::instrument(skip_all)]
-    async fn store_article(&self, article: &Message) -> Result<()> {
+    async fn store_article(&self, article: &Message) -> Result<Vec<(String, u64)>> {
         let msg_id =
             extract_message_id(article).ok_or_else(|| anyhow::anyhow!("missing Message-ID"))?;
         let headers = serde_json::to_string(&Headers(article.headers.clone()))?;
@@ -111,6 +111,7 @@ impl Storage for PostgresStorage {
 
         // Associate with each group and create overview data
         let now = chrono::Utc::now().timestamp();
+        let mut placed = Vec::new();
         for group in newsgroups {
             let next: i64 = sqlx::query_scalar(
                 "SELECT COALESCE(MAX(number),0)+1 FROM group_articles WHERE group_name = $1",
@@ -143,9 +144,10 @@ impl Storage for PostgresStorage {
             .bind(&overview_data)
             .execute(&self.pool)
             .await?;
+            placed.push((group, u64::try_from(next).unwrap_or(0)));
         }
 
-        Ok(())
+        Ok(placed)
     }
 
     #[tracing::instrument(skip_all)]

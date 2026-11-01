@@ -3,14 +3,13 @@
 //! Successful commands print JSON on stdout. Diagnostics go to stderr.
 
 use std::path::{Path, PathBuf};
-use std::time::Duration;
 
 use anyhow::{Context, bail};
 use clap::{Parser, Subcommand};
 use iroh_news::mcp::{McpConfig, serve};
 use iroh_news::{
     DiscoveryMode, Identity, JoinRequest, PostRequest, ReadRequest, Session, Settings, admin_call,
-    discover, discovery_qname, join_request, load_or_create_secret_key, prepare_join,
+    discover, discovery_qname, join_request, load_or_create_secret_key, prepare_join, run_watch,
     stash_password,
 };
 use serde::Deserialize;
@@ -79,12 +78,16 @@ enum Command {
         #[arg(long)]
         references: Option<String>,
     },
-    /// Poll a group and print one JSON article per line.
+    /// Follow new articles. Uses iroh-gossip, and polls if gossip is down.
     Watch {
-        group: String,
-        /// Seconds between polls.
+        /// One or more newsgroups.
+        groups: Vec<String>,
+        /// Seconds between polls when gossip is unavailable.
         #[arg(long, default_value_t = 15)]
         interval: u64,
+        /// Print signed header notifications and do not fetch article bodies.
+        #[arg(long)]
+        notify_only: bool,
     },
     /// Write a local config stub and print a block to paste to the operator.
     ///
@@ -568,28 +571,20 @@ async fn run() -> anyhow::Result<()> {
             Ok(())
         }
         Command::Watch {
-            ref group,
+            ref groups,
             interval,
+            notify_only,
         } => {
             if interval == 0 {
                 bail!("--interval must be at least 1 second");
             }
-            let mut session = open_session(&cli, &state_dir).await?;
-            loop {
-                let since = session.cursor(group)?;
-                let articles = session
-                    .read(ReadRequest {
-                        group: group.clone(),
-                        since,
-                        limit: None,
-                        update_cursor: true,
-                    })
-                    .await?;
-                for article in articles {
-                    println!("{}", serde_json::to_string(&article)?);
-                }
-                tokio::time::sleep(Duration::from_secs(interval)).await;
-            }
+            run_watch(
+                load_settings(&cli, &state_dir)?,
+                groups,
+                interval,
+                notify_only,
+            )
+            .await
         }
     }
 }

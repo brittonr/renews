@@ -14,8 +14,10 @@ type GroupDescriptionStream<'a> = Pin<Box<dyn Stream<Item = Result<(String, Stri
 
 #[async_trait]
 pub trait Storage: Send + Sync {
-    /// Store `article` and associate it with all groups specified in the Newsgroups header
-    async fn store_article(&self, article: &Message) -> Result<()>;
+    /// Store `article` and associate it with all groups specified in the Newsgroups header.
+    ///
+    /// The returned pairs are `(group, article number)` for each placement.
+    async fn store_article(&self, article: &Message) -> Result<Vec<(String, u64)>>;
 
     /// Retrieve an article by group name and article number
     async fn get_article_by_number(&self, group: &str, number: u64) -> Result<Option<Message>>;

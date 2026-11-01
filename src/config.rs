@@ -122,6 +122,24 @@ pub struct IrohConfig {
     /// Unauthenticated join requests. Off unless explicitly enabled.
     #[serde(default)]
     pub join_requests: JoinRequestsConfig,
+
+    /// Header notifications over iroh-gossip. On unless explicitly disabled.
+    #[serde(default)]
+    pub gossip: GossipConfig,
+}
+
+/// iroh-gossip notifications for newly stored articles.
+#[derive(Debug, Deserialize, Clone)]
+pub struct GossipConfig {
+    /// Broadcast a signed header when an article is stored.
+    #[serde(default = "default_true")]
+    pub enable: bool,
+}
+
+impl Default for GossipConfig {
+    fn default() -> Self {
+        Self { enable: true }
+    }
 }
 
 /// Limits for the public join channel.
@@ -185,6 +203,7 @@ impl Default for IrohConfig {
             bind_addr: None,
             wait_for_relay: true,
             join_requests: JoinRequestsConfig::default(),
+            gossip: GossipConfig::default(),
         }
     }
 }
@@ -803,6 +822,7 @@ See 'examples/config.toml' for a valid configuration example."
         self.iroh.allowed_peers = other.iroh.allowed_peers;
         self.iroh.admin_peers = other.iroh.admin_peers;
         self.iroh.join_requests = other.iroh.join_requests;
+        self.iroh.gossip = other.iroh.gossip;
     }
 }
 

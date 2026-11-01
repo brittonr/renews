@@ -47,6 +47,9 @@ let
     max_pending = ${toString cfg.joinRequests.maxPending}
     ttl_days = ${toString cfg.joinRequests.ttlDays}
 
+    [iroh.gossip]
+    enable = ${if cfg.gossip.enable then "true" else "false"}
+
     [user_limits]
     post_rate_per_minute = ${toString cfg.postRatePerMinute}
     post_burst = ${toString cfg.postBurst}
@@ -109,6 +112,19 @@ in
       type = lib.types.str;
       default = "bots.local";
       description = "Hostname used in generated Message-IDs.";
+    };
+
+    gossip.enable = lib.mkOption {
+      type = lib.types.bool;
+      default = true;
+      description = ''
+        Announce each accepted article as a small signed header on
+        iroh-gossip. Clients subscribed with `iroh-news watch` receive it
+        immediately and fall back to polling when this is off. Only
+        allowlisted endpoints can join the swarm. The record changes only
+        when `iroh.key` changes, because the topic is a hash of the endpoint
+        id and the group name.
+      '';
     };
 
     joinRequests = {

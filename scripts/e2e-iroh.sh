@@ -14,7 +14,12 @@ news="$root/target/debug/iroh-news"
 
 tmp=$(mktemp -d)
 srv=""
+watch_pid=""
 cleanup() {
+  if [ -n "$watch_pid" ]; then
+    kill "$watch_pid" 2>/dev/null || true
+    wait "$watch_pid" 2>/dev/null || true
+  fi
   if [ -n "$srv" ]; then
     kill "$srv" 2>/dev/null || true
     wait "$srv" 2>/dev/null || true
@@ -23,14 +28,17 @@ cleanup() {
 }
 trap cleanup EXIT
 
-mkdir -p "$tmp/state-a" "$tmp/state-b" "$tmp/state-admin" "$tmp/state-join"
+mkdir -p "$tmp/state-a" "$tmp/state-b" "$tmp/state-admin" "$tmp/state-join" "$tmp/state-watch"
 id_a=$("$news" --state-dir "$tmp/state-a" id)
 id_b=$("$news" --state-dir "$tmp/state-b" id)
 id_admin=$("$news" --state-dir "$tmp/state-admin" id)
+id_watch=$("$news" --state-dir "$tmp/state-watch" id)
 peer_a=$(printf '%s' "$id_a" | sed -n 's/.*"endpoint_id":"\([^"]*\)".*/\1/p')
 peer_admin=$(printf '%s' "$id_admin" | sed -n 's/.*"endpoint_id":"\([^"]*\)".*/\1/p')
+peer_watch=$(printf '%s' "$id_watch" | sed -n 's/.*"endpoint_id":"\([^"]*\)".*/\1/p')
 test -n "$peer_a"
 test -n "$peer_admin"
+test -n "$peer_watch"
 
 printf '%s\n' 'secret' > "$tmp/pass"
 chmod 600 "$tmp/pass"
@@ -52,7 +60,7 @@ key_path = "$tmp/iroh.key"
 localhost_tcp = true
 bind_addr = "127.0.0.1:0"
 wait_for_relay = false
-allowed_peers = ["$peer_a"]
+allowed_peers = ["$peer_a", "$peer_watch"]
 admin_peers = ["$peer_admin"]
 
 [iroh.join_requests]
@@ -104,8 +112,59 @@ printf '%s\n' "$record" | grep -qx "id=${endpoint_id}"
 "$renews" --config "$tmp/renews.toml" admin discovery-txt slime.onix.computer --ticket \
   | grep -q "_iroh-news.slime.onix.computer. IN TXT \"ticket=${ticket}\""
 "$news" --config "$tmp/bot.toml" --state-dir "$tmp/state-a" --no-relays groups
+cat > "$tmp/watch.toml" <<EOF
+server = "$ticket"
+username = "bot"
+password_file = "$tmp/pass"
+EOF
+"$news" --config "$tmp/watch.toml" --state-dir "$tmp/state-watch" --no-relays watch bots.general \
+  > "$tmp/watch.out" 2> "$tmp/watch.err" &
+watch_pid=$!
+ready=""
+for _ in $(seq 1 50); do
+  if grep -q 'via gossip' "$tmp/watch.err"; then
+    ready=1
+    break
+  fi
+  if ! kill -0 "$watch_pid" 2>/dev/null; then
+    echo "watch exited before joining" >&2
+    cat "$tmp/watch.err" >&2
+    exit 1
+  fi
+  sleep 0.1
+done
+if [ -z "$ready" ]; then
+  echo "watch did not join gossip" >&2
+  cat "$tmp/watch.err" >&2
+  exit 1
+fi
+start_ns=$(date +%s%N)
 printf '%s\n' 'hello from e2e' | "$news" --config "$tmp/bot.toml" --state-dir "$tmp/state-a" --no-relays post \
   --group bots.general --subject 'e2e'
+seen=""
+for _ in $(seq 1 20); do
+  if grep -q 'hello from e2e' "$tmp/watch.out"; then
+    seen=1
+    break
+  fi
+  sleep 0.1
+done
+end_ns=$(date +%s%N)
+if [ -z "$seen" ]; then
+  echo "watch did not receive the article via gossip" >&2
+  cat "$tmp/watch.err" "$tmp/watch.out" >&2
+  exit 1
+fi
+elapsed_ms=$(( (end_ns - start_ns) / 1000000 ))
+echo "gossip latency ms: ${elapsed_ms}"
+if [ "$elapsed_ms" -ge 2000 ]; then
+  echo "gossip notification took ${elapsed_ms}ms" >&2
+  exit 1
+fi
+if grep -q 'polling every' "$tmp/watch.err"; then
+  echo "watch fell back to polling" >&2
+  exit 1
+fi
 
 found=""
 for _ in $(seq 1 40); do

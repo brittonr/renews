@@ -160,6 +160,18 @@ pub async fn serve(parts: IrohParts, bind: IrohBind) -> anyhow::Result<IrohServe
         .map_err(|err| anyhow::anyhow!("bind iroh endpoint: {err}"))?;
 
     let runtime = crate::admin::RuntimeStore::open(&bind.runtime_db).await?;
+    let mut gated_gossip = None;
+    if let Some((gated, hub)) = crate::gossip::start(
+        endpoint.clone(),
+        parts.config.clone(),
+        runtime.clone(),
+        &parts.storage,
+    )
+    .await
+    {
+        parts.queue.set_fanout(hub);
+        gated_gossip = Some(gated);
+    }
     let live = Arc::new(crate::admin::LivePeers::default());
     let started = std::time::Instant::now();
     let endpoint_id_for_admin = endpoint.id().to_string();
@@ -192,11 +204,14 @@ pub async fn serve(parts: IrohParts, bind: IrohBind) -> anyhow::Result<IrohServe
             runtime: admin.ctx.runtime.clone(),
         },
     };
-    let router = Router::builder(endpoint)
+    let mut router = Router::builder(endpoint)
         .accept(ALPN, nntp)
         .accept(crate::admin::ADMIN_ALPN, admin)
-        .accept(crate::join::JOIN_ALPN, join)
-        .spawn();
+        .accept(crate::join::JOIN_ALPN, join);
+    if let Some(gated) = gated_gossip {
+        router = router.accept(crate::gossip::GOSSIP_ALPN, gated);
+    }
+    let router = router.spawn();
 
     // Direct addresses show up shortly after bind. Include them in the ticket
     // even when a relay is not reachable.

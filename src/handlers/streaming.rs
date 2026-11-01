@@ -83,11 +83,15 @@ impl CommandHandler for IHaveHandler {
             };
 
             // Store immediately for protocol compliance (second IHAVE should know article exists)
-            if ctx.storage.store_article(&article).await.is_err() {
-                Span::current().record("outcome", "rejected_storage");
-                write_simple(&mut ctx.writer, RESP_437_REJECTED).await?;
-                return Ok(());
-            }
+            let placed = match ctx.storage.store_article(&article).await {
+                Ok(placed) => placed,
+                Err(_) => {
+                    Span::current().record("outcome", "rejected_storage");
+                    write_simple(&mut ctx.writer, RESP_437_REJECTED).await?;
+                    return Ok(());
+                }
+            };
+            ctx.queue.announce(&article, &placed);
 
             // Also queue for background processing consistency
             let _ = ctx.queue.submit(queued_article).await; // Don't fail if queue is full since we already stored
@@ -199,11 +203,15 @@ impl CommandHandler for TakeThisHandler {
             };
 
             // Store immediately for protocol compliance (duplicate TAKETHIS should be detected)
-            if ctx.storage.store_article(&article).await.is_err() {
-                Span::current().record("outcome", "rejected_storage");
-                write_simple(&mut ctx.writer, &streaming_response(439, id)).await?;
-                return Ok(());
-            }
+            let placed = match ctx.storage.store_article(&article).await {
+                Ok(placed) => placed,
+                Err(_) => {
+                    Span::current().record("outcome", "rejected_storage");
+                    write_simple(&mut ctx.writer, &streaming_response(439, id)).await?;
+                    return Ok(());
+                }
+            };
+            ctx.queue.announce(&article, &placed);
 
             // Also queue for background processing consistency
             let _ = ctx.queue.submit(queued_article).await; // Don't fail if queue is full since we already stored

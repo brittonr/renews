@@ -11,6 +11,8 @@ pub mod config;
 pub mod control;
 pub mod error;
 pub mod filters;
+#[cfg(feature = "iroh")]
+pub mod gossip;
 pub mod groups;
 pub mod handlers;
 pub mod identity;
@@ -19,6 +21,7 @@ pub mod iroh;
 #[cfg(feature = "iroh")]
 pub mod join;
 pub mod limits;
+pub mod notify;
 pub mod overview;
 pub mod peers;
 pub mod prelude;

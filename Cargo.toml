@@ -55,7 +55,9 @@ futures-core = "0.3"
 smallvec = { version = "1.13", features = ["serde"] }
 dashmap = "5.5"
 systemd_socket = "0.1"
+bytes = { version = "1", optional = true }
 iroh = { workspace = true, optional = true }
+iroh-gossip = { version = "0.101", optional = true, default-features = false, features = ["net"] }
 iroh-tickets = { workspace = true, optional = true }
 
 [features]
@@ -64,7 +66,7 @@ websocket = ["tokio-tungstenite"]
 postgres = ["sqlx/postgres"]
 # QUIC transport via iroh. Plain TCP stays available; iroh deployments bind it to
 # localhost unless `addr` names a host or `[iroh] localhost_tcp` is false.
-iroh = ["dep:iroh", "dep:iroh-tickets"]
+iroh = ["dep:iroh", "dep:iroh-tickets", "dep:iroh-gossip", "dep:bytes"]
 
 [workspace]
 resolver = "2"

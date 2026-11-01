@@ -7,6 +7,7 @@
 use crate::Message;
 use crate::auth::DynAuth;
 use crate::config::Config;
+use crate::notify::FanoutSlot;
 use crate::storage::DynStorage;
 use anyhow::Result;
 use flume::{Receiver, Sender};
@@ -32,13 +33,28 @@ pub struct QueuedArticle {
 pub struct ArticleQueue {
     sender: Sender<QueuedArticle>,
     receiver: Receiver<QueuedArticle>,
+    fanout: FanoutSlot,
 }
 
 impl ArticleQueue {
     /// Create a new article queue with the specified capacity
     pub fn new(capacity: usize) -> Self {
         let (sender, receiver) = flume::bounded(capacity);
-        Self { sender, receiver }
+        Self {
+            sender,
+            receiver,
+            fanout: FanoutSlot::new(),
+        }
+    }
+
+    /// Install the live notification fanout. Later calls replace it.
+    pub fn set_fanout(&self, fanout: Arc<dyn crate::notify::ArticleFanout>) {
+        self.fanout.set(fanout);
+    }
+
+    /// Publish header notes for articles that were just stored.
+    pub fn announce(&self, article: &Message, placed: &[(String, u64)]) {
+        self.fanout.publish(article, placed);
     }
 
     /// Submit an article to the queue for processing
@@ -104,9 +120,10 @@ impl WorkerPool {
             let storage = self.storage.clone();
             let auth = self.auth.clone();
             let config = self.config.clone();
+            let fanout = self.queue.fanout.clone();
 
             let handle = tokio::spawn(async move {
-                worker_task(worker_id, receiver, storage, auth, config).await;
+                worker_task(worker_id, receiver, storage, auth, config, fanout).await;
             });
 
             handles.push(handle);
@@ -127,6 +144,7 @@ async fn worker_task(
     storage: DynStorage,
     auth: DynAuth,
     config: Arc<RwLock<Config>>,
+    fanout: FanoutSlot,
 ) {
     debug!(worker_id = worker_id, "Article worker started");
 
@@ -150,7 +168,7 @@ async fn worker_task(
 
         async {
             let start = std::time::Instant::now();
-            match process_article(&queued_article, &storage, &auth, &config).await {
+            match process_article(&queued_article, &storage, &auth, &config, &fanout).await {
                 Ok(()) => {
                     tracing::Span::current().record("outcome", "success");
                     debug!(duration_ms = start.elapsed().as_millis() as u64, "Article processed");
@@ -174,6 +192,7 @@ async fn process_article(
     storage: &DynStorage,
     auth: &DynAuth,
     config: &Arc<RwLock<Config>>,
+    fanout: &FanoutSlot,
 ) -> Result<()> {
     let article = &queued_article.message;
 
@@ -226,7 +245,8 @@ async fn process_article(
         return Ok(());
     }
 
-    storage.store_article(article).await?;
+    let placed = storage.store_article(article).await?;
+    fanout.publish(article, &placed);
     debug!("Article stored successfully");
 
     Ok(())

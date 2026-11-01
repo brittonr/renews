@@ -353,8 +353,9 @@ impl CommandHandler for NewGroupHandler {
                 body: format!("{username} created {name}\n\n{description}\n"),
             };
             crate::parse::ensure_date(&mut message);
-            if let Err(err) = ctx.storage.store_article(&message).await {
-                tracing::warn!(error = %err, "failed to announce new group");
+            match ctx.storage.store_article(&message).await {
+                Ok(placed) => ctx.queue.announce(&message, &placed),
+                Err(err) => tracing::warn!(error = %err, "failed to announce new group"),
             }
         }
         tracing::info!(group = %name, creator = %username, "group created");

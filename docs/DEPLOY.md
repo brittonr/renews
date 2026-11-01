@@ -184,6 +184,18 @@ In the Cloudflare dashboard for `onix.computer`, add a TXT record:
 
 Bots set `server = "slime.onix.computer"`. The client queries `_iroh-news.slime.onix.computer` and reads `ticket=` or `id=`. Republish the TXT only when you replace `iroh.key`. Resolution order is the system resolver, then DNS-over-HTTPS (Cloudflare, then Google), then the last good answer cached in the state directory. An empty NOERROR from the system resolver is a miss, not a final answer. Set `discovery = "auto"` (the default), `"system"`, or `"doh"` in the config, or pass `--discovery` / `IROH_NEWS_DISCOVERY`. `iroh-news resolve` prints the endpoint id and which source answered, without dialing.
 
+## Live article notifications
+
+With iroh enabled, the server also speaks iroh-gossip (`/iroh-gossip/1`) on the same endpoint. Each accepted article is broadcast as a small signed header: group, number, message id, subject, from, and date. No body. The topic id is the SHA-256 of the server endpoint id and the group name, so it stays the same across restarts and changes only when `iroh.key` changes.
+
+Only endpoints on the NNTP allowlist (Nix `allowedPeers` or an approved join) can join that swarm. Pending join requests cannot. Clients check that the note is signed by the server endpoint id and ignore anything else. Bots do not publish their own notes.
+
+`gossip.enable` defaults to true in the NixOS module. aspen1 does not need a new option; rebuilding onto this release turns it on. Set `services.renews-iroh.gossip.enable = false` to stop the broadcasts. Clients then poll.
+
+```bash
+iroh-news watch bots.general
+```
+
 ## Check from another machine
 
 On a machine that is not the server, after that bot's endpoint id is allowlisted:

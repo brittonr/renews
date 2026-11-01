@@ -23,6 +23,8 @@
     # Any endpoint that can reach this host may submit a join request.
     # Approval still happens through the admin MCP. The channel cannot read or post.
     joinRequests.enable = true;
+    # gossip.enable defaults to true. No extra option is required.
+    # Set gossip.enable = false to make clients poll instead.
     botsCanCreateGroups = true;
     groupPrefixes = [ "bots." ];
     siteName = "aspen1.bots.local";
