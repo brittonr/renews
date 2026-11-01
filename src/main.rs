@@ -70,13 +70,19 @@ enum AdminCommand {
     },
     /// Remove a user
     RemoveUser { user: String },
-    /// Print the DNS TXT record for this server's current iroh ticket.
+    /// Print the DNS TXT record for this server.
     ///
     /// The name is the public DNS name, for example `slime.onix.computer`.
-    /// Publish `_iroh-news.<name>` in the onix.computer zone.
+    /// Publish `_iroh-news.<name>` in the onix.computer zone. The default
+    /// value is `id=<endpoint id>`, which stays the same across restarts.
+    /// Pass `--ticket` for the full ticket, which embeds direct addresses
+    /// and changes every time the process starts.
     DiscoveryTxt {
         /// Public name, without the `_iroh-news` label.
         name: String,
+        /// Print `ticket=` instead of the stable `id=`.
+        #[arg(long)]
+        ticket: bool,
     },
     /// Update user's PGP key
     UpdateKey { user: String, pgp_key: String },
@@ -245,6 +251,14 @@ fn read_secret(value: Option<String>, file: Option<std::path::PathBuf>) -> Resul
     value.ok_or_else(|| anyhow::anyhow!("password is required"))
 }
 
+/// Endpoint id embedded in an iroh ticket. Stable for the lifetime of `iroh.key`.
+#[cfg(feature = "iroh")]
+fn endpoint_id_from_ticket(ticket: &str) -> Result<String> {
+    let parsed = <iroh_tickets::endpoint::EndpointTicket as std::str::FromStr>::from_str(ticket)
+        .map_err(|err| anyhow::anyhow!("invalid endpoint ticket: {err}"))?;
+    Ok(parsed.endpoint_addr().id.to_string())
+}
+
 async fn run_admin(cmd: AdminCommand, cfg: &Config) -> Result<()> {
     let storage = storage::open(&cfg.db_path).await?;
     let auth = auth::open(&cfg.auth_db_path).await?;
@@ -281,7 +295,17 @@ async fn run_admin(cmd: AdminCommand, cfg: &Config) -> Result<()> {
         AdminCommand::RemoveUser { user } => {
             auth.remove_user(&user).await?;
         }
-        AdminCommand::DiscoveryTxt { name } => {
+        AdminCommand::DiscoveryTxt {
+            name,
+            ticket: full_ticket,
+        } => {
+            if name.is_empty()
+                || !name
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || byte == b'.' || byte == b'-')
+            {
+                return Err(anyhow::anyhow!("discovery name must be a DNS name"));
+            }
             let path = std::path::Path::new(&cfg.iroh.key_path).with_extension("ticket");
             let ticket = std::fs::read_to_string(&path).map_err(|err| {
                 anyhow::anyhow!(
@@ -296,8 +320,22 @@ async fn run_admin(cmd: AdminCommand, cfg: &Config) -> Result<()> {
                     path.display()
                 ));
             }
-            println!("_iroh-news.{name}. IN TXT \"ticket={ticket}\"");
-            println!("ticket={ticket}");
+            let value = if full_ticket {
+                format!("ticket={ticket}")
+            } else {
+                #[cfg(feature = "iroh")]
+                {
+                    format!("id={}", endpoint_id_from_ticket(ticket)?)
+                }
+                #[cfg(not(feature = "iroh"))]
+                {
+                    return Err(anyhow::anyhow!(
+                        "printing an id= record needs the iroh feature; pass --ticket to print the ticket"
+                    ));
+                }
+            };
+            println!("_iroh-news.{name}. IN TXT \"{value}\"");
+            println!("{value}");
         }
         AdminCommand::UpdateKey { user, pgp_key } => {
             auth.update_pgp_key(&user, &pgp_key).await?;

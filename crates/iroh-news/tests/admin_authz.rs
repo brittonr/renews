@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use iroh::SecretKey;
 use iroh::endpoint::RelayMode;
-use iroh_news::{ADMIN_ALPN, Session, Settings, admin_call};
+use iroh_news::{ADMIN_ALPN, DiscoveryMode, Session, Settings, admin_call};
 use renews::admin::ADMIN_ALPN as SERVER_ADMIN_ALPN;
 use renews::config::Config;
 use renews::iroh::{IrohBind, IrohParts};
@@ -29,6 +29,7 @@ fn settings(
         secret_key: key,
         relays: false,
         state_dir: dir.to_path_buf(),
+        discovery: DiscoveryMode::Auto,
     }
 }
 
@@ -91,9 +92,17 @@ async fn admin_rejects_bots_and_runtime_peer_connects() {
     let ticket = server.ticket.clone();
     let state = dir.path();
 
-    let bot_admin = admin_call(&ticket, state, bot_key.clone(), false, "status", json!({}))
-        .await
-        .expect_err("bot allowlist must not open the admin channel");
+    let bot_admin = admin_call(
+        &ticket,
+        state,
+        bot_key.clone(),
+        false,
+        "status",
+        json!({}),
+        DiscoveryMode::Auto,
+    )
+    .await
+    .expect_err("bot allowlist must not open the admin channel");
     let bot_admin = format!("{bot_admin:#}");
     assert!(bot_admin.contains("not allowed"), "{bot_admin}");
 
@@ -104,6 +113,7 @@ async fn admin_rejects_bots_and_runtime_peer_connects() {
         false,
         "status",
         json!({}),
+        DiscoveryMode::Auto,
     )
     .await
     .expect_err("stranger");
@@ -117,6 +127,7 @@ async fn admin_rejects_bots_and_runtime_peer_connects() {
         false,
         "status",
         json!({}),
+        DiscoveryMode::Auto,
     )
     .await
     .expect("admin status");
@@ -130,6 +141,7 @@ async fn admin_rejects_bots_and_runtime_peer_connects() {
         false,
         "remove_peer",
         json!({"endpoint_id": bot_id, "confirm": true}),
+        DiscoveryMode::Auto,
     )
     .await
     .expect_err("nix peer");
@@ -147,6 +159,7 @@ async fn admin_rejects_bots_and_runtime_peer_connects() {
         false,
         "approve_join",
         json!({"block": {"username": "newbie", "endpoint_id": newbie_id, "owner": "Ada"}}),
+        DiscoveryMode::Auto,
     )
     .await
     .expect("approve_join");
@@ -178,6 +191,7 @@ async fn admin_rejects_bots_and_runtime_peer_connects() {
         false,
         "add_peer",
         json!({"endpoint_id": extra_id, "label": "extra"}),
+        DiscoveryMode::Auto,
     )
     .await
     .unwrap();
@@ -209,6 +223,7 @@ async fn admin_rejects_bots_and_runtime_peer_connects() {
         false,
         "remove_peer",
         json!({"endpoint_id": extra_id, "confirm": true}),
+        DiscoveryMode::Auto,
     )
     .await
     .unwrap();

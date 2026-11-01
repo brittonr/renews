@@ -21,7 +21,10 @@ pub mod mcp;
 
 pub use admin_client::{ADMIN_ALPN, JOIN_ALPN, admin_call, join_request, stash_password};
 
-pub use discover::{DiscoveryRecord, cloudflare_txt_line, discovery_qname, parse_txt_records};
+pub use discover::{
+    DiscoveryMode, DiscoveryRecord, DiscoverySource, ResolvedEndpoint, cloudflare_txt_line,
+    discover, discovery_qname, parse_txt_records,
+};
 pub use nntp_client::{Article, GroupEntry, Overview};
 
 /// ALPN shared with the renews iroh listener.
@@ -39,6 +42,8 @@ pub struct Settings {
     /// Use the n0 relays. Tests on one machine turn this off.
     pub relays: bool,
     pub state_dir: PathBuf,
+    /// How a DNS server name is resolved. Tickets and endpoint ids skip DNS.
+    pub discovery: DiscoveryMode,
 }
 
 /// A connected, authenticated NNTP session.
@@ -91,9 +96,9 @@ impl Session {
             .await
             .map_err(|err| anyhow::anyhow!("bind iroh endpoint: {err}"))?;
 
-        let addr =
-            discover::resolve_server(&settings.server, &settings.state_dir, &discover::HickoryTxt)
-                .await?;
+        let addr = discover::discover(&settings.server, &settings.state_dir, settings.discovery)
+            .await?
+            .addr;
         let connection = endpoint
             .connect(addr, ALPN)
             .await

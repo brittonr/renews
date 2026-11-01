@@ -96,7 +96,13 @@ username = "bot"
 password_file = "$tmp/pass"
 EOF
 
-"$renews" --config "$tmp/renews.toml" admin discovery-txt slime.onix.computer | grep -q '_iroh-news.slime.onix.computer. IN TXT "ticket=endpoint'
+endpoint_id=$(sed -n 's/^iroh endpoint id: //p' "$tmp/server.log")
+test -n "$endpoint_id"
+record=$("$renews" --config "$tmp/renews.toml" admin discovery-txt slime.onix.computer)
+printf '%s\n' "$record" | grep -q "_iroh-news.slime.onix.computer. IN TXT \"id=${endpoint_id}\""
+printf '%s\n' "$record" | grep -qx "id=${endpoint_id}"
+"$renews" --config "$tmp/renews.toml" admin discovery-txt slime.onix.computer --ticket \
+  | grep -q "_iroh-news.slime.onix.computer. IN TXT \"ticket=${ticket}\""
 "$news" --config "$tmp/bot.toml" --state-dir "$tmp/state-a" --no-relays groups
 printf '%s\n' 'hello from e2e' | "$news" --config "$tmp/bot.toml" --state-dir "$tmp/state-a" --no-relays post \
   --group bots.general --subject 'e2e'

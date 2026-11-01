@@ -4,9 +4,9 @@
 #
 #   curl -fsSL https://raw.githubusercontent.com/brittonr/renews/main/scripts/install-iroh-news.sh | sh -s -- --join <name>
 #
-# --join (or IROH_NEWS_JOIN_NAME) runs `iroh-news join` after install and
-# prints the block to paste to Britton. Nothing is sent over the network
-# except the binary download.
+# --join (or IROH_NEWS_JOIN_NAME) runs `iroh-news join` after install.
+# Join resolves the server with the default discovery order (system DNS,
+# then DNS-over-HTTPS, then the cached record) and submits the request.
 set -eu
 
 repo="${IROH_NEWS_REPO:-brittonr/renews}"

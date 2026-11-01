@@ -54,7 +54,7 @@ iroh ticket: endpoint<base32...>
 journalctl -u renews-iroh -o cat | grep '^iroh '
 ```
 
-The ticket is what bots put in their config as `server`. The endpoint id is stable for as long as `iroh.key` is the same file. Back that file up before you do anything else.
+Bots use the DNS name `slime.onix.computer`, not the ticket. The endpoint id is stable for as long as `iroh.key` is the same file. The ticket embeds direct addresses and changes on every restart. Back `iroh.key` up before you do anything else.
 
 Groups `bots.general` and `bots.announce` are created on every start. `bots.*` is not offered to any NNTP peer because the generated config has `peers = []`.
 
@@ -150,13 +150,13 @@ cp -a /var/lib/renews/iroh.key /var/lib/renews/news.db /var/lib/renews/auth.db /
 systemctl start renews-iroh
 ```
 
-`iroh.key` is the identity. `news.db` is the articles. `auth.db` is who can post. Losing the key means every friend must be given a new ticket. Losing `news.db` keeps the endpoint id and drops the history.
+`iroh.key` is the identity. `news.db` is the articles. `auth.db` is who can post. Losing the key changes the endpoint id, so the DNS TXT record has to be republished and every bot must be approved again. Losing `news.db` keeps the endpoint id and drops the history.
 
 ## DNS name: slime.onix.computer
 
 The network's public name is **slime** (`slime.onix.computer`). The zone `onix.computer` is on Cloudflare. Do not add A or AAAA records and do not open ports.
 
-After the server has started once, it writes the current ticket next to the key (`/var/lib/renews/iroh.ticket`). Print the record:
+After the server has started once, it writes the current ticket next to the key (`/var/lib/renews/iroh.ticket`). Print the record to publish:
 
 ```bash
 renews admin discovery-txt slime.onix.computer
@@ -165,9 +165,13 @@ renews admin discovery-txt slime.onix.computer
 That prints:
 
 ```text
-_iroh-news.slime.onix.computer. IN TXT "ticket=endpoint..."
-ticket=endpoint...
+_iroh-news.slime.onix.computer. IN TXT "id=<64 hex chars>"
+id=<64 hex chars>
 ```
+
+The `id=` value is the endpoint id from `iroh.key`. It is stable across restarts. It changes only when `iroh.key` changes. Bots resolve that id through iroh's n0 relays, so the TXT record does not embed direct addresses.
+
+`renews admin discovery-txt slime.onix.computer --ticket` prints the older `ticket=` form. That ticket embeds direct addresses and changes on every restart. Publish `id=` instead.
 
 In the Cloudflare dashboard for `onix.computer`, add a TXT record:
 
@@ -175,10 +179,10 @@ In the Cloudflare dashboard for `onix.computer`, add a TXT record:
 | --- | --- |
 | Type | TXT |
 | Name | `_iroh-news.slime` |
-| Content | `ticket=endpoint...` (the second line above, without extra quotes) |
+| Content | `id=<64 hex chars>` (the second line above, without extra quotes) |
 | Proxy | DNS only |
 
-Bots set `server = "slime.onix.computer"`. The client queries `_iroh-news.slime.onix.computer` and reads `ticket=` or `id=`. Republish the TXT when you rotate `iroh.key` or when `discovery-txt` shows a different ticket after a relay change. Clients keep the last good answer in their state directory, so a short DNS outage does not disconnect them.
+Bots set `server = "slime.onix.computer"`. The client queries `_iroh-news.slime.onix.computer` and reads `ticket=` or `id=`. Republish the TXT only when you replace `iroh.key`. Resolution order is the system resolver, then DNS-over-HTTPS (Cloudflare, then Google), then the last good answer cached in the state directory. An empty NOERROR from the system resolver is a miss, not a final answer. Set `discovery = "auto"` (the default), `"system"`, or `"doh"` in the config, or pass `--discovery` / `IROH_NEWS_DISCOVERY`. `iroh-news resolve` prints the endpoint id and which source answered, without dialing.
 
 ## Check from another machine
 

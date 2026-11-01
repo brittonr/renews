@@ -9,8 +9,9 @@ use anyhow::{Context, bail};
 use clap::{Parser, Subcommand};
 use iroh_news::mcp::{McpConfig, serve};
 use iroh_news::{
-    Identity, JoinRequest, PostRequest, ReadRequest, Session, Settings, admin_call, join_request,
-    load_or_create_secret_key, prepare_join, stash_password,
+    DiscoveryMode, Identity, JoinRequest, PostRequest, ReadRequest, Session, Settings, admin_call,
+    discover, discovery_qname, join_request, load_or_create_secret_key, prepare_join,
+    stash_password,
 };
 use serde::Deserialize;
 use serde::Serialize;
@@ -36,6 +37,10 @@ struct Cli {
     /// Overrides the config file and `IROH_NEWS_SERVER`.
     #[arg(long, global = true)]
     server: Option<String>,
+    /// How to resolve a DNS name: `auto` (system, then DNS-over-HTTPS, then
+    /// cache), `system`, or `doh`. Overrides `IROH_NEWS_DISCOVERY` and config.
+    #[arg(long, global = true, value_name = "MODE")]
+    discovery: Option<String>,
     #[command(subcommand)]
     command: Command,
 }
@@ -110,6 +115,10 @@ enum Command {
     },
     /// Show the local endpoint id and the join request status.
     Status,
+    /// Resolve a server name and print the endpoint id and discovery source.
+    ///
+    /// Does not dial the server and does not submit a join request.
+    Resolve,
     /// stdio MCP server for a local assistant. Does not listen on a port.
     Mcp {
         /// Also expose admin tools. Requires this endpoint id in aspen1 `adminPeers`.
@@ -138,6 +147,9 @@ enum AdminOp {
     Status,
     DiscoveryTxt {
         name: String,
+        /// Print `ticket=` instead of the stable `id=`.
+        #[arg(long)]
+        ticket: bool,
     },
     ListPeers,
     AddPeer {
@@ -246,6 +258,10 @@ struct FileConfig {
     /// Directory for generated passwords. Defaults to `$state_dir/secrets`.
     #[serde(default)]
     secrets_dir: Option<PathBuf>,
+    /// `auto`, `system`, or `doh`. Overridden by `--discovery` and
+    /// `IROH_NEWS_DISCOVERY`.
+    #[serde(default)]
+    discovery: Option<String>,
 }
 
 #[tokio::main]
@@ -384,6 +400,7 @@ async fn run() -> anyhow::Result<()> {
                     &name,
                     &owner_text,
                     &note,
+                    discovery_mode(&cli, file.as_ref())?,
                 )
                 .await?;
                 let status = response
@@ -442,6 +459,7 @@ async fn run() -> anyhow::Result<()> {
                     &username,
                     owner,
                     "",
+                    discovery_mode(&cli, file.as_ref())?,
                 )
                 .await
                 .unwrap_or_else(
@@ -483,6 +501,7 @@ async fn run() -> anyhow::Result<()> {
                 .as_ref()
                 .and_then(|cfg| cfg.secrets_dir.clone())
                 .unwrap_or_else(|| state_dir.join("secrets"));
+            let discovery = discovery_mode(&cli, file.as_ref())?;
             serve(McpConfig {
                 server,
                 state_dir: state_dir.clone(),
@@ -493,6 +512,7 @@ async fn run() -> anyhow::Result<()> {
                 from,
                 secrets_dir,
                 admin,
+                discovery,
             })
             .await
         }
@@ -505,6 +525,7 @@ async fn run() -> anyhow::Result<()> {
                 .or_else(|| file.as_ref().and_then(|cfg| cfg.server.clone()))
                 .context("set --server, IROH_NEWS_SERVER, or server in the config")?;
             let relays = !cli.no_relays;
+            let discovery = discovery_mode(&cli, file.as_ref())?;
             let secrets_dir = file
                 .and_then(|cfg| cfg.secrets_dir)
                 .unwrap_or_else(|| state_dir.join("secrets"));
@@ -516,10 +537,34 @@ async fn run() -> anyhow::Result<()> {
                 relays,
                 &op_name,
                 args,
+                discovery,
             )
             .await?;
             stash_password(&mut result, &secrets_dir)?;
             print_json(&result)?;
+            Ok(())
+        }
+        Command::Resolve => {
+            let file = read_file_config(&cli)?;
+            let server = cli
+                .server
+                .clone()
+                .or_else(|| std::env::var("IROH_NEWS_SERVER").ok())
+                .or_else(|| file.as_ref().and_then(|cfg| cfg.server.clone()))
+                .unwrap_or_else(|| iroh_news::DEFAULT_JOIN_SERVER.to_string());
+            let resolved =
+                discover(&server, &state_dir, discovery_mode(&cli, file.as_ref())?).await?;
+            let qname = if resolved.source == iroh_news::DiscoverySource::Direct {
+                serde_json::Value::Null
+            } else {
+                serde_json::Value::String(discovery_qname(server.trim()))
+            };
+            print_json(&serde_json::json!({
+                "server": server,
+                "qname": qname,
+                "endpoint_id": resolved.addr.id.to_string(),
+                "source": resolved.source.as_str(),
+            }))?;
             Ok(())
         }
         Command::Watch {
@@ -575,6 +620,7 @@ fn load_settings(cli: &Cli, state_dir: &Path) -> anyhow::Result<Settings> {
         .with_context(|| format!("reading config {}", path.display()))?;
     let file: FileConfig =
         toml::from_str(&text).with_context(|| format!("parsing config {}", path.display()))?;
+    let discovery = discovery_mode(cli, Some(&file))?;
     let username = std::env::var("IROH_NEWS_USERNAME")
         .ok()
         .or(file.username)
@@ -606,7 +652,20 @@ fn load_settings(cli: &Cli, state_dir: &Path) -> anyhow::Result<Settings> {
         secret_key: load_or_create_secret_key(state_dir)?,
         relays: !cli.no_relays,
         state_dir: state_dir.to_path_buf(),
+        discovery,
     })
+}
+
+fn discovery_mode(cli: &Cli, file: Option<&FileConfig>) -> anyhow::Result<DiscoveryMode> {
+    let raw = cli
+        .discovery
+        .clone()
+        .or_else(|| std::env::var("IROH_NEWS_DISCOVERY").ok())
+        .or_else(|| file.and_then(|cfg| cfg.discovery.clone()));
+    match raw.as_deref() {
+        None => Ok(DiscoveryMode::Auto),
+        Some(value) => DiscoveryMode::parse(value),
+    }
 }
 
 fn read_password_file(path: &Path) -> anyhow::Result<String> {
@@ -662,7 +721,10 @@ async fn admin_args(op: &AdminOp) -> anyhow::Result<(String, serde_json::Value)>
     use serde_json::json;
     Ok(match op {
         AdminOp::Status => ("status".into(), json!({})),
-        AdminOp::DiscoveryTxt { name } => ("discovery_txt".into(), json!({"name": name})),
+        AdminOp::DiscoveryTxt { name, ticket } => (
+            "discovery_txt".into(),
+            json!({"name": name, "ticket": ticket}),
+        ),
         AdminOp::ListPeers => ("list_peers".into(), json!({})),
         AdminOp::AddPeer { endpoint_id, label } => (
             "add_peer".into(),

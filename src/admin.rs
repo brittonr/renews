@@ -593,15 +593,25 @@ impl AdminContext {
         {
             bail!("discovery name must be a DNS name");
         }
-        let ticket_guard = self.ticket.read().unwrap_or_else(|err| err.into_inner());
-        let ticket = ticket_guard.trim();
-        if !ticket.starts_with("endpoint") {
-            bail!("server has no endpoint ticket yet");
-        }
+        let full_ticket = args.get("ticket").and_then(Value::as_bool).unwrap_or(false);
+        let value = if full_ticket {
+            let ticket_guard = self.ticket.read().unwrap_or_else(|err| err.into_inner());
+            let ticket = ticket_guard.trim();
+            if !ticket.starts_with("endpoint") {
+                bail!("server has no endpoint ticket yet");
+            }
+            format!("ticket={ticket}")
+        } else {
+            if self.endpoint_id.len() != 64 {
+                bail!("server has no endpoint id yet");
+            }
+            format!("id={}", self.endpoint_id)
+        };
         Ok(json!({
             "name": name,
-            "record": format!("_iroh-news.{name}. IN TXT \"ticket={ticket}\""),
-            "ticket": format!("ticket={ticket}"),
+            "record": format!("_iroh-news.{name}. IN TXT \"{value}\""),
+            "value": value,
+            "endpoint_id": self.endpoint_id,
         }))
     }
 

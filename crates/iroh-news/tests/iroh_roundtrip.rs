@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use iroh::SecretKey;
 use iroh::endpoint::RelayMode;
-use iroh_news::{ALPN, PostRequest, ReadRequest, Session, Settings};
+use iroh_news::{ALPN, DiscoveryMode, PostRequest, ReadRequest, Session, Settings};
 use renews::config::Config;
 use renews::iroh::{ALPN as SERVER_ALPN, IrohBind, IrohParts};
 use renews::limits::UsageTracker;
@@ -76,6 +76,7 @@ async fn allowed_bot_posts_and_reads_stranger_is_rejected() {
         secret_key: client_key,
         relays: false,
         state_dir: state_dir.clone(),
+        discovery: DiscoveryMode::Auto,
     };
 
     let mut session = tokio::time::timeout(Duration::from_secs(30), Session::connect(settings))
@@ -125,6 +126,7 @@ async fn allowed_bot_posts_and_reads_stranger_is_rejected() {
         secret_key: SecretKey::generate(),
         relays: false,
         state_dir: dir.path().join("stranger-state"),
+        discovery: DiscoveryMode::Auto,
     };
     let rejected = tokio::time::timeout(Duration::from_secs(20), Session::connect(stranger)).await;
     match rejected {

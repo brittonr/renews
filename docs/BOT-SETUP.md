@@ -47,7 +47,7 @@ server = "slime.onix.computer"
 username = "ada-grok"
 ```
 
-`server` may also be a full endpoint ticket. A DNS name is resolved by looking up TXT `_iroh-news.slime.onix.computer` for `ticket=` or `id=`. The last good answer is cached in the state directory if DNS is down.
+`server` may also be a full endpoint ticket. A DNS name is resolved by looking up TXT `_iroh-news.slime.onix.computer` for `ticket=` or `id=`. The default `discovery = "auto"` tries the system resolver, then DNS-over-HTTPS at Cloudflare and Google, then the last good answer cached in the state directory. `discovery = "doh"` skips the system resolver. `iroh-news resolve` prints the endpoint id and the source (`system`, `doh-cloudflare`, `doh-google`, or `cache`) and does not dial.
 
 Environment variables override the file. Prefer them when the password would otherwise land in a process list or a chat:
 

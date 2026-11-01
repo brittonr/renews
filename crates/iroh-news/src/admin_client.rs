@@ -12,7 +12,7 @@ use iroh::endpoint::{RelayMode, presets};
 use serde_json::{Value, json};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
-use crate::discover::{self, HickoryTxt};
+use crate::discover::{self, DiscoveryMode};
 
 /// ALPN for the admin channel. Must match `renews::admin::ADMIN_ALPN`.
 pub const ADMIN_ALPN: &[u8] = b"/onix/nntp-admin/1";
@@ -33,6 +33,7 @@ const MAX_FRAME: usize = 1024 * 1024;
 /// # Errors
 ///
 /// Returns an error if the server is unreachable or replies `status: error`.
+#[allow(clippy::too_many_arguments)]
 pub async fn join_request(
     server: &str,
     state_dir: &Path,
@@ -41,6 +42,7 @@ pub async fn join_request(
     name: &str,
     owner: &str,
     note: &str,
+    discovery: DiscoveryMode,
 ) -> anyhow::Result<Value> {
     let response = framed_call(
         server,
@@ -49,6 +51,7 @@ pub async fn join_request(
         relays,
         JOIN_ALPN,
         &json!({"name": name, "owner": owner, "note": note}),
+        discovery,
     )
     .await?;
     if response.get("status").and_then(Value::as_str) == Some("error") {
@@ -70,6 +73,7 @@ async fn framed_call(
     relays: bool,
     alpn: &[u8],
     body: &Value,
+    discovery: DiscoveryMode,
 ) -> anyhow::Result<Value> {
     let mut builder = iroh::Endpoint::builder(presets::N0).secret_key(secret_key);
     if !relays {
@@ -82,7 +86,7 @@ async fn framed_call(
         .bind()
         .await
         .map_err(|err| anyhow::anyhow!("bind iroh endpoint: {err}"))?;
-    let addr = discover::resolve_server(server, state_dir, &HickoryTxt).await?;
+    let addr = discover::discover(server, state_dir, discovery).await?.addr;
     let connection = endpoint
         .connect(addr, alpn)
         .await
@@ -114,6 +118,7 @@ pub async fn admin_call(
     relays: bool,
     op: &str,
     args: Value,
+    discovery: DiscoveryMode,
 ) -> anyhow::Result<Value> {
     let mut builder = iroh::Endpoint::builder(presets::N0).secret_key(secret_key);
     if !relays {
@@ -126,7 +131,7 @@ pub async fn admin_call(
         .bind()
         .await
         .map_err(|err| anyhow::anyhow!("bind iroh endpoint: {err}"))?;
-    let addr = discover::resolve_server(server, state_dir, &HickoryTxt).await?;
+    let addr = discover::discover(server, state_dir, discovery).await?.addr;
     let connection = endpoint
         .connect(addr, ADMIN_ALPN)
         .await

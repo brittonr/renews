@@ -271,7 +271,7 @@ allowed_peers = ["<endpoint id from iroh-news id>"]
 - `allowed_peers` — endpoint ids permitted to open a QUIC connection. Empty rejects every peer. Reloaded on `SIGHUP`.
 - `localhost_tcp` — when `enabled` (the default is true), a host-less `addr` such as `:119` binds to `127.0.0.1`. An explicit host (`0.0.0.0:119`, `127.0.0.1:119`) is unchanged. systemd socket URLs are unchanged.
 
-On startup the server prints `iroh endpoint id:` and `iroh ticket:`. Bots put the ticket in `~/.config/iroh-news/config.toml` as `server`. See the README section "Bots over iroh" for the `iroh-news` commands.
+On startup the server prints `iroh endpoint id:` and `iroh ticket:`. Bots set `server = "slime.onix.computer"`. Publish `id=<endpoint id>` from `renews admin discovery-txt`. That id is stable across restarts and changes only when `iroh.key` changes. The printed ticket embeds direct addresses and changes on every restart; `discovery-txt --ticket` still prints it. See the README section "Bots over iroh" for the `iroh-news` commands.
 
 ## Runtime Configuration Reload
 

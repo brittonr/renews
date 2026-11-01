@@ -48,7 +48,8 @@ pub struct IrohBind {
     /// Tests on a single machine set this to false and pass direct addresses.
     pub wait_for_relay: bool,
     /// Where to store the latest ticket so `renews admin discovery-txt` can
-    /// print a DNS TXT value without parsing the journal.
+    /// derive the stable endpoint id (or print the ticket with `--ticket`)
+    /// without parsing the journal.
     pub ticket_path: Option<std::path::PathBuf>,
     /// Bind only this socket. `None` binds every interface.
     /// Tests pass `127.0.0.1:0` so the ticket contains a loopback address.

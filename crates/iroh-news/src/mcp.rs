@@ -18,7 +18,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use crate::admin_client::{admin_call, stash_password};
-use crate::{PostRequest, ReadRequest, Session, Settings};
+use crate::{DiscoveryMode, PostRequest, ReadRequest, Session, Settings};
 
 #[derive(Clone)]
 struct McpState {
@@ -30,6 +30,7 @@ struct McpState {
     password: Option<String>,
     from: String,
     secrets_dir: PathBuf,
+    discovery: DiscoveryMode,
 }
 
 impl McpState {
@@ -49,6 +50,7 @@ impl McpState {
             secret_key: self.secret_key.clone(),
             relays: self.relays,
             state_dir: self.state_dir.clone(),
+            discovery: self.discovery,
         })
     }
 
@@ -64,6 +66,7 @@ impl McpState {
             self.relays,
             op,
             args,
+            self.discovery,
         )
         .await?;
         stash_password(&mut result, &self.secrets_dir)?;
@@ -124,6 +127,9 @@ struct PostArgs {
 struct NameArgs {
     /// DNS name such as `slime.onix.computer`, without the `_iroh-news` label.
     name: String,
+    /// Publish the full ticket. The default is the stable `id=` record.
+    #[serde(default)]
+    ticket: bool,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -437,7 +443,9 @@ impl AdminMcp {
         )
     }
 
-    #[tool(description = "TXT record to publish for a DNS name. Does not publish it.")]
+    #[tool(
+        description = "TXT record to publish for a DNS name. Defaults to id=<endpoint id>, which stays the same across restarts and changes only when iroh.key changes. Pass ticket: true for the full ticket, which embeds direct addresses and changes on every restart. Does not publish the record."
+    )]
     async fn admin_discovery_txt(
         &self,
         Parameters(args): Parameters<NameArgs>,
@@ -445,7 +453,10 @@ impl AdminMcp {
         ok_json(
             &self
                 .state
-                .admin("discovery_txt", json!({"name": args.name}))
+                .admin(
+                    "discovery_txt",
+                    json!({"name": args.name, "ticket": args.ticket}),
+                )
                 .await
                 .map_err(mcp_err)?,
         )
@@ -774,6 +785,7 @@ pub struct McpConfig {
     pub from: String,
     pub secrets_dir: PathBuf,
     pub admin: bool,
+    pub discovery: DiscoveryMode,
 }
 
 /// Serve MCP on stdio until stdin closes.
@@ -791,6 +803,7 @@ pub async fn serve(config: McpConfig) -> anyhow::Result<()> {
         password: config.password,
         from: config.from,
         secrets_dir: config.secrets_dir,
+        discovery: config.discovery,
     };
     if config.admin {
         let service = AdminMcp::new(state)
