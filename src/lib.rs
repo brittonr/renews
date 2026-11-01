@@ -12,8 +12,11 @@ pub mod control;
 pub mod error;
 pub mod filters;
 pub mod handlers;
+pub mod identity;
 #[cfg(feature = "iroh")]
 pub mod iroh;
+#[cfg(feature = "iroh")]
+pub mod join;
 pub mod limits;
 pub mod overview;
 pub mod peers;
@@ -56,6 +59,14 @@ struct ConnectionConfig {
 ///
 /// Returns an error if there's a problem handling the client connection,
 /// such as network I/O errors or protocol violations.
+/// Key-bound identity for an iroh NNTP connection.
+pub struct KeyAuth {
+    pub endpoint_id: String,
+    /// Set when this endpoint is already bound to an account.
+    pub username: Option<String>,
+    pub bindings: std::sync::Arc<dyn crate::identity::UserEndpoint>,
+}
+
 pub async fn handle_client<S>(
     socket: S,
     storage: DynStorage,
@@ -64,6 +75,38 @@ pub async fn handle_client<S>(
     is_tls: bool,
     queue: ArticleQueue,
     usage_tracker: Arc<UsageTracker>,
+) -> Result<()>
+where
+    S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+{
+    handle_client_key(
+        socket,
+        storage,
+        auth,
+        cfg,
+        is_tls,
+        queue,
+        usage_tracker,
+        None,
+    )
+    .await
+}
+
+/// Same as [`handle_client`], with optional iroh key authentication.
+///
+/// # Errors
+///
+/// Returns an error if there's a problem handling the client connection.
+#[allow(clippy::too_many_arguments)]
+pub async fn handle_client_key<S>(
+    socket: S,
+    storage: DynStorage,
+    auth: DynAuth,
+    cfg: Arc<RwLock<Config>>,
+    is_tls: bool,
+    queue: ArticleQueue,
+    usage_tracker: Arc<UsageTracker>,
+    key_auth: Option<KeyAuth>,
 ) -> Result<()>
 where
     S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
@@ -86,7 +129,14 @@ where
         )
     };
 
-    let session = Session::new(is_tls, allow_auth_insecure, allow_anonymous_posting);
+    let mut session = Session::new(is_tls, allow_auth_insecure, allow_anonymous_posting);
+    if let Some(key) = key_auth {
+        session.set_peer(key.endpoint_id, key.bindings);
+        if let Some(username) = key.username {
+            let is_admin = auth.is_admin(&username).await.unwrap_or(false);
+            session.authenticate_with_admin(username, is_admin);
+        }
+    }
     let session_id = session.session_id();
 
     // Create session span - NO client_addr for GDPR compliance

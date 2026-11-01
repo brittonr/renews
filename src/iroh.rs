@@ -184,9 +184,17 @@ pub async fn serve(parts: IrohParts, bind: IrohBind) -> anyhow::Result<IrohServe
             ticket: ticket_slot.clone(),
         },
     };
+    let join = crate::join::JoinProtocol {
+        ctx: crate::join::JoinContext {
+            auth: admin.ctx.auth.clone(),
+            config: admin.ctx.config.clone(),
+            runtime: admin.ctx.runtime.clone(),
+        },
+    };
     let router = Router::builder(endpoint)
         .accept(ALPN, nntp)
         .accept(crate::admin::ADMIN_ALPN, admin)
+        .accept(crate::join::JOIN_ALPN, join)
         .spawn();
 
     // Direct addresses show up shortly after bind. Include them in the ticket
@@ -300,7 +308,7 @@ impl ProtocolHandler for NntpProtocol {
         self.live.nntp.insert(caller.clone());
         let _session = crate::admin::LiveGuard {
             set: &self.live.nntp,
-            id: caller,
+            id: caller.clone(),
         };
 
         // The server opens the stream. `accept_bi` does not resolve until the
@@ -318,8 +326,24 @@ impl ProtocolHandler for NntpProtocol {
         let queue = self.queue.clone();
         let usage_tracker = self.usage_tracker.clone();
 
-        if let Err(err) =
-            crate::handle_client(stream, storage, auth, config, true, queue, usage_tracker).await
+        let bindings: std::sync::Arc<dyn crate::identity::UserEndpoint> =
+            std::sync::Arc::new(self.runtime.clone());
+        let username = self.runtime.user_for_endpoint(&caller).await.ok().flatten();
+        if let Err(err) = crate::handle_client_key(
+            stream,
+            storage,
+            auth,
+            config,
+            true,
+            queue,
+            usage_tracker,
+            Some(crate::KeyAuth {
+                endpoint_id: caller,
+                username,
+                bindings,
+            }),
+        )
+        .await
         {
             tracing::debug!(error = %err, "iroh nntp session ended");
         }

@@ -13,6 +13,7 @@ repo="${IROH_NEWS_REPO:-brittonr/renews}"
 dest_dir="${HOME}/.local/bin"
 dest="${dest_dir}/iroh-news"
 join_name="${IROH_NEWS_JOIN_NAME:-}"
+join_owner="${IROH_NEWS_JOIN_OWNER:-}"
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -30,6 +31,18 @@ while [ $# -gt 0 ]; do
         echo "install-iroh-news: --join needs a username" >&2
         exit 1
       fi
+      shift
+      ;;
+    --owner)
+      if [ $# -lt 2 ] || [ -z "$2" ]; then
+        echo "install-iroh-news: --owner needs a name" >&2
+        exit 1
+      fi
+      join_owner=$2
+      shift 2
+      ;;
+    --owner=*)
+      join_owner=${1#--owner=}
       shift
       ;;
     *)
@@ -90,7 +103,13 @@ mkdir -p "$dest_dir"
 install -m 0755 "${tmpdir}/iroh-news" "$dest"
 say "installed ${dest}"
 if [ -n "$join_name" ]; then
-  "$dest" join --name "$join_name"
+  set -- join --name "$join_name"
+  if [ -n "$join_owner" ]; then
+    set -- "$@" --owner "$join_owner"
+  fi
+  "$dest" "$@"
+  echo "Approval is pending. Check later with: iroh-news status" >&2
+  echo "Or wait: iroh-news join --name ${join_name} --wait" >&2
 else
   echo "endpoint id:"
   "$dest" id

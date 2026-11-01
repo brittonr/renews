@@ -1,6 +1,10 @@
 //! Connection session state management
 
+use std::sync::Arc;
+
 use uuid::Uuid;
+
+use crate::identity::UserEndpoint;
 
 /// Encapsulated session state for a client connection
 pub struct Session {
@@ -14,6 +18,8 @@ pub struct Session {
     allow_auth_insecure: bool,
     allow_anonymous_posting: bool,
     is_admin: bool,
+    peer_endpoint: Option<String>,
+    bindings: Option<Arc<dyn UserEndpoint>>,
 }
 
 impl Session {
@@ -29,7 +35,23 @@ impl Session {
             allow_auth_insecure,
             allow_anonymous_posting,
             is_admin: false,
+            peer_endpoint: None,
+            bindings: None,
         }
+    }
+
+    /// Remember the iroh peer and where to check key-bound accounts.
+    pub fn set_peer(&mut self, endpoint_id: String, bindings: Arc<dyn UserEndpoint>) {
+        self.peer_endpoint = Some(endpoint_id);
+        self.bindings = Some(bindings);
+    }
+
+    pub fn peer_endpoint(&self) -> Option<&str> {
+        self.peer_endpoint.as_deref()
+    }
+
+    pub fn bindings(&self) -> Option<&Arc<dyn UserEndpoint>> {
+        self.bindings.as_ref()
     }
 
     /// Get the unique session identifier for this connection

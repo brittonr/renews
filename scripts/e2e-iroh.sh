@@ -51,6 +51,9 @@ wait_for_relay = false
 allowed_peers = ["$peer_a"]
 admin_peers = ["$peer_admin"]
 
+[iroh.join_requests]
+enable = true
+
 [user_limits]
 post_rate_per_minute = 1
 post_burst = 1
@@ -128,7 +131,7 @@ cat > "$tmp/admin.toml" <<EOF
 server = "$ticket"
 EOF
 
-joined=$("$news" --state-dir "$tmp/state-join" join --name newbot --owner Ada --json)
+joined=$("$news" --state-dir "$tmp/state-join" --no-relays --server "$ticket" join --name newbot --owner Ada --json)
 printf '%s\n' "$joined" > "$tmp/join.json"
 approved=$("$news" --config "$tmp/admin.toml" --state-dir "$tmp/state-admin" --no-relays admin approve-join --file "$tmp/join.json")
 printf '%s\n' "$approved" | grep -q '"password_file"'
@@ -228,5 +231,52 @@ proc.stdin.close()
 proc.wait(timeout=10)
 print("mcp ok")
 PY
+
+mkdir -p "$tmp/state-fresh" "$tmp/state-spoof"
+"$news" --state-dir "$tmp/state-fresh" --no-relays --server "$ticket" join --name joiner --owner Ada --json > "$tmp/fresh.json"
+grep -q '"status":"pending"' "$tmp/fresh.json"
+fresh_id=$(sed -n 's/.*"endpoint_id":"\([^"]*\)".*/\1/p' "$tmp/fresh.json")
+cat > "$tmp/fresh.toml" <<EOF
+server = "$ticket"
+username = "joiner"
+EOF
+if "$news" --config "$tmp/fresh.toml" --state-dir "$tmp/state-fresh" --no-relays groups; then
+  echo "pending join was allowed onto NNTP" >&2
+  exit 1
+fi
+if "$news" --config "$tmp/admin.toml" --state-dir "$tmp/state-fresh" --no-relays admin status; then
+  echo "pending join was allowed onto the admin channel" >&2
+  exit 1
+fi
+python3 - "$news" "$tmp/admin.toml" "$tmp/state-admin" "$fresh_id" <<'PY'
+import json, subprocess, sys
+news, config, state, endpoint_id = sys.argv[1:]
+proc = subprocess.Popen(
+    [news, "--config", config, "--state-dir", state, "--no-relays", "mcp", "--admin"],
+    stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True,
+)
+def send(obj):
+    proc.stdin.write(json.dumps(obj) + "\n")
+    proc.stdin.flush()
+def read():
+    return json.loads(proc.stdout.readline())
+send({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"e2e","version":"0"}}})
+read()
+send({"jsonrpc":"2.0","method":"notifications/initialized"})
+send({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"admin_approve_join_request","arguments":{"endpoint_id": endpoint_id}}})
+approved = read()
+text = approved["result"]["content"][0]["text"]
+assert "approved" in text, text
+assert "password" not in text
+proc.stdin.close()
+proc.wait(timeout=20)
+print("approve ok")
+PY
+"$news" --config "$tmp/fresh.toml" --state-dir "$tmp/state-fresh" --no-relays groups | grep -q 'bots.general'
+printf '%s\n' 'joined without a password' | "$news" --config "$tmp/fresh.toml" --state-dir "$tmp/state-fresh" --no-relays post --group bots.general --subject 'key auth'
+if "$news" --state-dir "$tmp/state-spoof" --no-relays --server "$ticket" join --name joiner --owner Eve --json; then
+  echo "second endpoint took an approved name" >&2
+  exit 1
+fi
 
 echo "e2e ok"

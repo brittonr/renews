@@ -9,7 +9,7 @@ use anyhow::{Context, bail};
 use clap::{Parser, Subcommand};
 use iroh_news::mcp::{McpConfig, serve};
 use iroh_news::{
-    Identity, JoinRequest, PostRequest, ReadRequest, Session, Settings, admin_call,
+    Identity, JoinRequest, PostRequest, ReadRequest, Session, Settings, admin_call, join_request,
     load_or_create_secret_key, prepare_join, stash_password,
 };
 use serde::Deserialize;
@@ -90,7 +90,21 @@ enum Command {
         /// Print JSON instead of the human paste block.
         #[arg(long)]
         json: bool,
+        /// Optional note stored with the request.
+        #[arg(long)]
+        note: Option<String>,
+        /// Poll until Britton approves, then run `groups`.
+        #[arg(long)]
+        wait: bool,
+        /// Seconds between status polls when `--wait` is set.
+        #[arg(long, default_value_t = 30)]
+        interval: u64,
+        /// Give up on `--wait` after this many seconds.
+        #[arg(long, default_value_t = 86_400)]
+        timeout: u64,
     },
+    /// Show the local endpoint id and the join request status.
+    Status,
     /// stdio MCP server for a local assistant. Does not listen on a port.
     Mcp {
         /// Also expose admin tools. Requires this endpoint id in aspen1 `adminPeers`.
@@ -167,6 +181,23 @@ enum AdminOp {
         confirm: bool,
     },
     RateLimits,
+    ListJoinRequests,
+    ApproveJoinRequest {
+        #[arg(long)]
+        endpoint_id: Option<String>,
+        #[arg(long)]
+        name: Option<String>,
+        #[arg(long)]
+        rename: Option<String>,
+    },
+    RejectJoinRequest {
+        #[arg(long)]
+        endpoint_id: Option<String>,
+        #[arg(long)]
+        name: Option<String>,
+        #[arg(long)]
+        confirm: bool,
+    },
     /// Read a `iroh-news join --json` object from a file, or stdin when omitted.
     ApproveJoin {
         #[arg(long)]
@@ -277,14 +308,28 @@ async fn run() -> anyhow::Result<()> {
             }))?;
             Ok(())
         }
-        Command::Join { name, owner, json } => {
+        Command::Join {
+            ref name,
+            ref owner,
+            json,
+            ref note,
+            wait,
+            interval,
+            timeout,
+        } => {
+            if wait && interval == 0 {
+                bail!("--interval must be at least 1 second");
+            }
             let name = match name {
-                Some(name) => name,
+                Some(name) => name.clone(),
                 None => prompt_username()?,
             };
+            let file = read_file_config(&cli)?;
             let server = cli
                 .server
                 .clone()
+                .or_else(|| std::env::var("IROH_NEWS_SERVER").ok())
+                .or_else(|| file.as_ref().and_then(|cfg| cfg.server.clone()))
                 .unwrap_or_else(|| iroh_news::DEFAULT_JOIN_SERVER.to_string());
             let config_path = cli.config.clone().unwrap_or(default_config_path()?);
             let report = prepare_join(JoinRequest {
@@ -294,11 +339,89 @@ async fn run() -> anyhow::Result<()> {
                 state_dir: &state_dir,
                 config_path: &config_path,
             })?;
-            if json {
-                print_json(&report)?;
-            } else {
-                print!("{}", report.human());
+            let owner_text = owner.clone().unwrap_or_else(|| "operator".into());
+            let note = note.clone().unwrap_or_default();
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(timeout);
+            loop {
+                let response = join_request(
+                    &server,
+                    &state_dir,
+                    load_or_create_secret_key(&state_dir)?,
+                    !cli.no_relays,
+                    &name,
+                    &owner_text,
+                    &note,
+                )
+                .await?;
+                let status = response
+                    .get("status")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("unknown");
+                if json && !wait {
+                    print_json(&response)?;
+                } else if !json {
+                    println!("{}\nstatus: {status}\n", report.human().trim_end());
+                }
+                if status == "approved" {
+                    if wait {
+                        let mut session = open_session(&cli, &state_dir).await?;
+                        let groups = session.groups().await?;
+                        print_json(&groups)?;
+                        session.close().await?;
+                        eprintln!("approved. groups succeeded.");
+                    }
+                    break;
+                }
+                if status == "rejected" {
+                    bail!("join request was rejected");
+                }
+                if !wait || std::time::Instant::now() >= deadline {
+                    if wait {
+                        bail!("timed out waiting for approval");
+                    }
+                    eprintln!("Check later with: iroh-news status");
+                    eprintln!("Or wait: iroh-news join --name {name} --wait");
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_secs(interval)).await;
             }
+            Ok(())
+        }
+        Command::Status => {
+            let key = load_or_create_secret_key(&state_dir)?;
+            let file = read_file_config(&cli)?;
+            let server = cli
+                .server
+                .clone()
+                .or_else(|| std::env::var("IROH_NEWS_SERVER").ok())
+                .or_else(|| file.as_ref().and_then(|cfg| cfg.server.clone()));
+            let username = file.as_ref().and_then(|cfg| cfg.username.clone());
+            let password_configured =
+                optional_password(file.as_ref())?.is_some_and(|p| !p.is_empty());
+            let mut join_status = serde_json::Value::Null;
+            if let (Some(server), Some(username)) = (server.clone(), username.clone()) {
+                let owner = "operator";
+                join_status = join_request(
+                    &server,
+                    &state_dir,
+                    key.clone(),
+                    !cli.no_relays,
+                    &username,
+                    owner,
+                    "",
+                )
+                .await
+                .unwrap_or_else(
+                    |err| serde_json::json!({"status": "unreachable", "error": err.to_string()}),
+                );
+            }
+            print_json(&serde_json::json!({
+                "endpoint_id": key.public().to_string(),
+                "server": server,
+                "username": username,
+                "password_configured": password_configured,
+                "join": join_status,
+            }))?;
             Ok(())
         }
         Command::Mcp { admin } => {
@@ -436,9 +559,7 @@ fn load_settings(cli: &Cli, state_dir: &Path) -> anyhow::Result<Settings> {
     } else if let Some(password_file) = &file.password_file {
         read_password_file(password_file)?
     } else {
-        file.password.context(
-            "set IROH_NEWS_PASSWORD, IROH_NEWS_PASSWORD_FILE, or password/password_file in the config",
-        )?
+        file.password.unwrap_or_default()
     };
     let from = std::env::var("IROH_NEWS_FROM")
         .ok()
@@ -557,6 +678,23 @@ async fn admin_args(op: &AdminOp) -> anyhow::Result<(String, serde_json::Value)>
             json!({"message_id": message_id, "confirm": confirm}),
         ),
         AdminOp::RateLimits => ("rate_limits".into(), json!({})),
+        AdminOp::ListJoinRequests => ("list_join_requests".into(), json!({})),
+        AdminOp::ApproveJoinRequest {
+            endpoint_id,
+            name,
+            rename,
+        } => (
+            "approve_join_request".into(),
+            json!({"endpoint_id": endpoint_id, "name": name, "rename": rename}),
+        ),
+        AdminOp::RejectJoinRequest {
+            endpoint_id,
+            name,
+            confirm,
+        } => (
+            "reject_join_request".into(),
+            json!({"endpoint_id": endpoint_id, "name": name, "confirm": confirm}),
+        ),
         AdminOp::ApproveJoin { file } => {
             let text = if let Some(path) = file {
                 std::fs::read_to_string(path)

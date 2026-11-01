@@ -30,6 +30,16 @@ impl CommandHandler for AuthInfoHandler {
                     write_simple(&mut ctx.writer, RESP_501_NOT_ENOUGH).await?;
                     return Ok(());
                 }
+                if let Some(bound) = ctx
+                    .session
+                    .username()
+                    .filter(|_| ctx.session.is_authenticated())
+                    && args[1] != bound
+                {
+                    Span::current().record("outcome", "rejected_bound_user");
+                    write_simple(&mut ctx.writer, RESP_481_AUTH_REJECTED).await?;
+                    return Ok(());
+                }
                 ctx.session.set_pending_username(args[1].clone());
                 write_simple(&mut ctx.writer, RESP_381_PASSWORD_REQ).await?;
             }
@@ -42,6 +52,17 @@ impl CommandHandler for AuthInfoHandler {
                 if let Some(username) = ctx.session.pending_username() {
                     let username = username.to_string(); // Clone to avoid borrow issues
                     if ctx.auth.verify_user(&username, &args[1]).await? {
+                        if let Some(bindings) = ctx.session.bindings().cloned()
+                            && let Some(required) = bindings.endpoint_for_user(&username).await?
+                            && ctx.session.peer_endpoint() != Some(required.as_str())
+                        {
+                            Span::current().record("outcome", "rejected_wrong_endpoint");
+                            tracing::info!(
+                                "Authentication rejected: account is bound to another endpoint"
+                            );
+                            write_simple(&mut ctx.writer, RESP_481_AUTH_REJECTED).await?;
+                            return Ok(());
+                        }
                         // Check if user is admin
                         let is_admin = ctx.auth.is_admin(&username).await.unwrap_or(false);
 

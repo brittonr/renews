@@ -17,6 +17,9 @@ use crate::discover::{self, HickoryTxt};
 /// ALPN for the admin channel. Must match `renews::admin::ADMIN_ALPN`.
 pub const ADMIN_ALPN: &[u8] = b"/onix/nntp-admin/1";
 
+/// ALPN for join requests. Must match `renews::join::JOIN_ALPN`.
+pub const JOIN_ALPN: &[u8] = b"/onix/nntp-join/1";
+
 const MAX_FRAME: usize = 1024 * 1024;
 
 /// Call one admin operation. `args` is the operation object.
@@ -25,6 +28,85 @@ const MAX_FRAME: usize = 1024 * 1024;
 ///
 /// Returns an error if the peer rejects the endpoint, the frame fails, or the
 /// server reports `ok: false`.
+/// Submit one join request and return the server's JSON object.
+///
+/// # Errors
+///
+/// Returns an error if the server is unreachable or replies `status: error`.
+pub async fn join_request(
+    server: &str,
+    state_dir: &Path,
+    secret_key: SecretKey,
+    relays: bool,
+    name: &str,
+    owner: &str,
+    note: &str,
+) -> anyhow::Result<Value> {
+    let response = framed_call(
+        server,
+        state_dir,
+        secret_key,
+        relays,
+        JOIN_ALPN,
+        &json!({"name": name, "owner": owner, "note": note}),
+    )
+    .await?;
+    if response.get("status").and_then(Value::as_str) == Some("error") {
+        bail!(
+            "{}",
+            response
+                .get("error")
+                .and_then(Value::as_str)
+                .unwrap_or("join request failed")
+        );
+    }
+    Ok(response)
+}
+
+async fn framed_call(
+    server: &str,
+    state_dir: &Path,
+    secret_key: SecretKey,
+    relays: bool,
+    alpn: &[u8],
+    body: &Value,
+) -> anyhow::Result<Value> {
+    let mut builder = iroh::Endpoint::builder(presets::N0).secret_key(secret_key);
+    if !relays {
+        builder = builder
+            .relay_mode(RelayMode::Disabled)
+            .bind_addr((std::net::Ipv4Addr::LOCALHOST, 0))
+            .map_err(|err| anyhow::anyhow!("iroh client bind address: {err}"))?;
+    }
+    let endpoint = builder
+        .bind()
+        .await
+        .map_err(|err| anyhow::anyhow!("bind iroh endpoint: {err}"))?;
+    let addr = discover::resolve_server(server, state_dir, &HickoryTxt).await?;
+    let connection = endpoint
+        .connect(addr, alpn)
+        .await
+        .map_err(|err| anyhow::anyhow!("iroh connect: {err:#}"))?;
+    let (mut send, mut recv) = connection
+        .open_bi()
+        .await
+        .map_err(|err| anyhow::anyhow!("open stream: {err:#}"))?;
+    let response = async {
+        write_frame(&mut send, &serde_json::to_vec(body)?).await?;
+        let bytes = match read_frame(&mut recv).await {
+            Ok(bytes) => bytes,
+            Err(err) => {
+                let closed = connection.closed().await;
+                bail!("connection closed: {closed} ({err:#})");
+            }
+        };
+        serde_json::from_slice(&bytes).context("response is not JSON")
+    }
+    .await;
+    endpoint.close().await;
+    response
+}
+
 pub async fn admin_call(
     server: &str,
     state_dir: &Path,

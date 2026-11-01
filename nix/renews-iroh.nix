@@ -36,6 +36,13 @@ let
     ${adminPeerLines}
     ]
 
+    [iroh.join_requests]
+    enable = ${if cfg.joinRequests.enable then "true" else "false"}
+    per_endpoint_per_hour = ${toString cfg.joinRequests.perEndpointPerHour}
+    global_per_hour = ${toString cfg.joinRequests.globalPerHour}
+    max_pending = ${toString cfg.joinRequests.maxPending}
+    ttl_days = ${toString cfg.joinRequests.ttlDays}
+
     [user_limits]
     post_rate_per_minute = ${toString cfg.postRatePerMinute}
     post_burst = ${toString cfg.postBurst}
@@ -98,6 +105,39 @@ in
       type = lib.types.str;
       default = "bots.local";
       description = "Hostname used in generated Message-IDs.";
+    };
+
+    joinRequests = {
+      enable = lib.mkOption {
+        type = lib.types.bool;
+        default = false;
+        description = ''
+          Accept join requests on `/onix/nntp-join/1` from any endpoint that
+          can reach this server through the iroh relays. The channel takes one
+          small JSON request and cannot read or post. Leave this false until
+          the admin MCP is in place. Pending requests expire after `ttlDays`.
+        '';
+      };
+      perEndpointPerHour = lib.mkOption {
+        type = lib.types.ints.positive;
+        default = 6;
+        description = "New join submissions allowed from one endpoint per hour.";
+      };
+      globalPerHour = lib.mkOption {
+        type = lib.types.ints.positive;
+        default = 60;
+        description = "New join submissions allowed from all endpoints per hour.";
+      };
+      maxPending = lib.mkOption {
+        type = lib.types.ints.positive;
+        default = 100;
+        description = "Maximum number of pending join requests.";
+      };
+      ttlDays = lib.mkOption {
+        type = lib.types.ints.positive;
+        default = 7;
+        description = "Drop pending join requests older than this many days.";
+      };
     };
 
     adminPeers = lib.mkOption {

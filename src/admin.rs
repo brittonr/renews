@@ -78,6 +78,36 @@ impl RuntimeStore {
         )
         .execute(&pool)
         .await?;
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS join_requests (
+                endpoint_id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                owner TEXT NOT NULL,
+                note TEXT NOT NULL DEFAULT '',
+                status TEXT NOT NULL,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL
+            )",
+        )
+        .execute(&pool)
+        .await?;
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS endpoint_accounts (
+                endpoint_id TEXT PRIMARY KEY,
+                username TEXT NOT NULL UNIQUE
+            )",
+        )
+        .execute(&pool)
+        .await?;
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS join_hits (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                scope TEXT NOT NULL,
+                at INTEGER NOT NULL
+            )",
+        )
+        .execute(&pool)
+        .await?;
         Ok(Self { pool })
     }
 
@@ -100,7 +130,7 @@ impl RuntimeStore {
         Ok(row.is_some())
     }
 
-    async fn upsert(&self, endpoint_id: &str, label: &str) -> anyhow::Result<()> {
+    pub(crate) async fn upsert(&self, endpoint_id: &str, label: &str) -> anyhow::Result<()> {
         sqlx::query(
             "INSERT INTO runtime_peers (endpoint_id, label, added_at) VALUES (?, ?, ?)
              ON CONFLICT(endpoint_id) DO UPDATE SET label = excluded.label",
@@ -148,6 +178,193 @@ impl RuntimeStore {
             .await?;
         Ok(row.is_some())
     }
+
+    pub(crate) async fn expire_pending(&self, before: i64) -> anyhow::Result<u64> {
+        let result =
+            sqlx::query("DELETE FROM join_requests WHERE status = 'pending' AND created_at < ?")
+                .bind(before)
+                .execute(&self.pool)
+                .await?;
+        Ok(result.rows_affected())
+    }
+
+    pub(crate) async fn get_join(
+        &self,
+        endpoint_id: &str,
+    ) -> anyhow::Result<Option<crate::join::JoinRow>> {
+        let row = sqlx::query(
+            "SELECT endpoint_id, name, owner, note, status, created_at, updated_at FROM join_requests WHERE endpoint_id = ?",
+        )
+        .bind(endpoint_id)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row.map(|row| crate::join::JoinRow {
+            endpoint_id: row.get("endpoint_id"),
+            name: row.get("name"),
+            owner: row.get("owner"),
+            note: row.get("note"),
+            status: row.get("status"),
+            created_at: row.get("created_at"),
+            updated_at: row.get("updated_at"),
+        }))
+    }
+
+    pub(crate) async fn upsert_join(&self, row: &crate::join::JoinRow) -> anyhow::Result<()> {
+        sqlx::query(
+            "INSERT INTO join_requests (endpoint_id, name, owner, note, status, created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?)
+             ON CONFLICT(endpoint_id) DO UPDATE SET
+               name = excluded.name,
+               owner = excluded.owner,
+               note = excluded.note,
+               status = excluded.status,
+               updated_at = excluded.updated_at",
+        )
+        .bind(&row.endpoint_id)
+        .bind(&row.name)
+        .bind(&row.owner)
+        .bind(&row.note)
+        .bind(&row.status)
+        .bind(row.created_at)
+        .bind(row.updated_at)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    pub(crate) async fn count_pending(&self) -> anyhow::Result<u64> {
+        let n: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM join_requests WHERE status = 'pending'")
+                .fetch_one(&self.pool)
+                .await?;
+        Ok(u64::try_from(n).unwrap_or(0))
+    }
+
+    pub(crate) async fn name_in_use(
+        &self,
+        name: &str,
+        except_endpoint: &str,
+    ) -> anyhow::Result<bool> {
+        let row = sqlx::query(
+            "SELECT 1 FROM join_requests WHERE name = ? AND endpoint_id != ? AND status IN ('pending', 'approved')",
+        )
+        .bind(name)
+        .bind(except_endpoint)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row.is_some())
+    }
+
+    pub(crate) async fn list_joins(
+        &self,
+        status: &str,
+    ) -> anyhow::Result<Vec<crate::join::JoinRow>> {
+        let rows = sqlx::query(
+            "SELECT endpoint_id, name, owner, note, status, created_at, updated_at FROM join_requests WHERE status = ? ORDER BY created_at",
+        )
+        .bind(status)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows
+            .into_iter()
+            .map(|row| crate::join::JoinRow {
+                endpoint_id: row.get("endpoint_id"),
+                name: row.get("name"),
+                owner: row.get("owner"),
+                note: row.get("note"),
+                status: row.get("status"),
+                created_at: row.get("created_at"),
+                updated_at: row.get("updated_at"),
+            })
+            .collect())
+    }
+
+    pub(crate) async fn find_join_by_name(
+        &self,
+        name: &str,
+    ) -> anyhow::Result<Option<crate::join::JoinRow>> {
+        let row = sqlx::query(
+            "SELECT endpoint_id, name, owner, note, status, created_at, updated_at FROM join_requests WHERE name = ? ORDER BY updated_at DESC",
+        )
+        .bind(name)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row.map(|row| crate::join::JoinRow {
+            endpoint_id: row.get("endpoint_id"),
+            name: row.get("name"),
+            owner: row.get("owner"),
+            note: row.get("note"),
+            status: row.get("status"),
+            created_at: row.get("created_at"),
+            updated_at: row.get("updated_at"),
+        }))
+    }
+
+    pub(crate) async fn prune_hits(&self, before: i64) -> anyhow::Result<()> {
+        sqlx::query("DELETE FROM join_hits WHERE at < ?")
+            .bind(before)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    pub(crate) async fn count_hits(&self, scope: &str, since: i64) -> anyhow::Result<u64> {
+        let n: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM join_hits WHERE scope = ? AND at >= ?")
+                .bind(scope)
+                .bind(since)
+                .fetch_one(&self.pool)
+                .await?;
+        Ok(u64::try_from(n).unwrap_or(0))
+    }
+
+    pub(crate) async fn add_hit(&self, scope: &str, at: i64) -> anyhow::Result<()> {
+        sqlx::query("INSERT INTO join_hits (scope, at) VALUES (?, ?)")
+            .bind(scope)
+            .bind(at)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    pub async fn user_for_endpoint(&self, endpoint_id: &str) -> anyhow::Result<Option<String>> {
+        let row = sqlx::query("SELECT username FROM endpoint_accounts WHERE endpoint_id = ?")
+            .bind(endpoint_id)
+            .fetch_optional(&self.pool)
+            .await?;
+        Ok(row.map(|row| row.get("username")))
+    }
+
+    pub async fn bound_endpoint(&self, username: &str) -> anyhow::Result<Option<String>> {
+        let row = sqlx::query("SELECT endpoint_id FROM endpoint_accounts WHERE username = ?")
+            .bind(username)
+            .fetch_optional(&self.pool)
+            .await?;
+        Ok(row.map(|row| row.get("endpoint_id")))
+    }
+
+    pub(crate) async fn bind_endpoint(
+        &self,
+        endpoint_id: &str,
+        username: &str,
+    ) -> anyhow::Result<()> {
+        sqlx::query(
+            "INSERT INTO endpoint_accounts (endpoint_id, username) VALUES (?, ?)
+             ON CONFLICT(endpoint_id) DO UPDATE SET username = excluded.username",
+        )
+        .bind(endpoint_id)
+        .bind(username)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+}
+
+#[async_trait::async_trait]
+impl crate::identity::UserEndpoint for RuntimeStore {
+    async fn endpoint_for_user(&self, username: &str) -> anyhow::Result<Option<String>> {
+        self.bound_endpoint(username).await
+    }
 }
 
 /// SQLite URI for the runtime database next to an iroh secret key.
@@ -179,7 +396,7 @@ pub fn canonical_endpoint(raw: &str) -> anyhow::Result<String> {
     Ok(id.to_string())
 }
 
-fn validate_username(name: &str) -> anyhow::Result<()> {
+pub(crate) fn validate_username(name: &str) -> anyhow::Result<()> {
     let bytes = name.as_bytes();
     let ok = !bytes.is_empty()
         && bytes.len() <= 64
@@ -215,7 +432,7 @@ fn validate_group(name: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn generate_password() -> String {
+pub(crate) fn generate_password() -> String {
     use rand_core::RngCore;
     let mut bytes = [0u8; 24];
     rand_core::OsRng.fill_bytes(&mut bytes);
@@ -340,6 +557,9 @@ impl AdminContext {
             "delete_article" => self.delete_article(args).await?,
             "rate_limits" => self.rate_limits().await?,
             "approve_join" => self.approve_join(args).await?,
+            "list_join_requests" => self.list_join_requests().await?,
+            "approve_join_request" => self.approve_join_request(args).await?,
+            "reject_join_request" => self.reject_join_request(args).await?,
             other => bail!("unknown admin op {other}"),
         };
         tracing::info!(caller, op, "admin action ok");
@@ -359,6 +579,7 @@ impl AdminContext {
             "uptime_secs": self.started.elapsed().as_secs(),
             "connected_peers": { "nntp": nntp, "admin": admin },
             "groups": groups,
+            "pending_joins": self.runtime.count_pending().await?,
         }))
     }
 
@@ -590,6 +811,7 @@ impl AdminContext {
         self.runtime.upsert(&endpoint_id, label).await?;
         let password = generate_password();
         self.auth.add_user(username, &password).await?;
+        self.runtime.bind_endpoint(&endpoint_id, username).await?;
         self.runtime.enable(username).await?;
         Ok(json!({
             "username": username,
@@ -597,6 +819,74 @@ impl AdminContext {
             "label": label,
             "password": password,
         }))
+    }
+
+    async fn list_join_requests(&self) -> anyhow::Result<Value> {
+        let limits = crate::join::JoinLimits::from(&self.config.read().await.iroh.join_requests);
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| i64::try_from(d.as_secs()).unwrap_or(0))
+            .unwrap_or(0);
+        self.runtime
+            .expire_pending(now.saturating_sub(limits.ttl_secs))
+            .await?;
+        let rows = self.runtime.list_joins("pending").await?;
+        Ok(json!(
+            rows.into_iter()
+                .map(|row| json!({
+                    "endpoint_id": row.endpoint_id,
+                    "name": row.name,
+                    "owner": row.owner,
+                    "note": row.note,
+                    "status": row.status,
+                    "created_at": row.created_at,
+                }))
+                .collect::<Vec<_>>()
+        ))
+    }
+
+    async fn approve_join_request(&self, args: &Value) -> anyhow::Result<Value> {
+        let endpoint_id = self.resolve_join_target(args).await?;
+        let rename = args.get("rename").and_then(Value::as_str);
+        let row = crate::join::approve_request(
+            &self.runtime,
+            &self.auth,
+            &endpoint_id,
+            rename,
+            crate::join::now_secs(),
+        )
+        .await?;
+        Ok(json!({
+            "status": row.status,
+            "endpoint_id": row.endpoint_id,
+            "name": row.name,
+            "owner": row.owner,
+        }))
+    }
+
+    async fn reject_join_request(&self, args: &Value) -> anyhow::Result<Value> {
+        require_confirm(args)?;
+        let endpoint_id = self.resolve_join_target(args).await?;
+        let row = crate::join::reject_request(&self.runtime, &endpoint_id, crate::join::now_secs())
+            .await?;
+        Ok(json!({
+            "status": row.status,
+            "endpoint_id": row.endpoint_id,
+            "name": row.name,
+        }))
+    }
+
+    async fn resolve_join_target(&self, args: &Value) -> anyhow::Result<String> {
+        if let Some(endpoint_id) = args.get("endpoint_id").and_then(Value::as_str) {
+            return canonical_endpoint(endpoint_id);
+        }
+        if let Some(name) = args.get("name").and_then(Value::as_str) {
+            if let Some(row) = self.runtime.find_join_by_name(name).await? {
+                return Ok(row.endpoint_id);
+            }
+            bail!("no join request named {name}");
+        }
+        bail!("pass endpoint_id or name");
     }
 
     async fn require_account(&self, username: &str) -> anyhow::Result<()> {

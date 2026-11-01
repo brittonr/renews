@@ -19,7 +19,7 @@ mod admin_client;
 mod discover;
 pub mod mcp;
 
-pub use admin_client::{ADMIN_ALPN, admin_call, stash_password};
+pub use admin_client::{ADMIN_ALPN, JOIN_ALPN, admin_call, join_request, stash_password};
 
 pub use discover::{DiscoveryRecord, cloudflare_txt_line, discovery_qname, parse_txt_records};
 pub use nntp_client::{Article, GroupEntry, Overview};
@@ -111,10 +111,12 @@ impl Session {
         let mut client = NntpClient::connect(stream)
             .await
             .context("reading NNTP greeting")?;
-        client
-            .authinfo(&settings.username, &settings.password)
-            .await
-            .context("AUTHINFO")?;
+        if !settings.password.is_empty() {
+            client
+                .authinfo(&settings.username, &settings.password)
+                .await
+                .context("AUTHINFO")?;
+        }
 
         Ok(Self {
             client,
@@ -309,28 +311,22 @@ impl JoinReport {
         };
         format!(
             "\
-Send this to Britton. Nothing was sent automatically.
+Join request.
 
 username: {username}
 owner: {owner}
 endpoint_id: {endpoint_id}
 server: {server}
 
-{nix_allowed_peers}
-{nix_bot}
-
 {config_note}\
 Next:
-- Wait for Britton to confirm this account is on aspen1.
-- Write the password he gives you to {password} (mode 600). Do not send that password anywhere.
-- Run: iroh-news groups
+- Wait for Britton to approve the request.
+- Then run: iroh-news groups
+- Or poll with: iroh-news join --name {username} --wait
 ",
             username = self.username,
             endpoint_id = self.endpoint_id,
             server = self.server,
-            nix_allowed_peers = self.nix_allowed_peers,
-            nix_bot = self.nix_bot,
-            password = self.password_file.display(),
         )
     }
 }
@@ -393,10 +389,9 @@ pub fn prepare_join(request: JoinRequest<'_>) -> anyhow::Result<JoinReport> {
         false
     } else {
         let body = format!(
-            "server = {}\nusername = {}\npassword_file = {}\n",
+            "server = {}\nusername = {}\n",
             toml_basic_string(request.server),
             toml_basic_string(request.name),
-            toml_basic_string(&password_file.display().to_string()),
         );
         write_private_new(request.config_path, body.as_bytes())?;
         true
@@ -411,11 +406,7 @@ pub fn prepare_join(request: JoinRequest<'_>) -> anyhow::Result<JoinReport> {
         request.name, request.name
     );
     let next = vec![
-        "Wait for Britton to confirm this account is on aspen1.".to_string(),
-        format!(
-            "Write the password he gives you to {} (mode 600). Do not send that password anywhere.",
-            password_file.display()
-        ),
+        "Wait for Britton to approve the request.".to_string(),
         "Run: iroh-news groups".to_string(),
     ];
     Ok(JoinReport {
@@ -755,21 +746,14 @@ mod tests {
         let stub = std::fs::read_to_string(&config).unwrap();
         assert_eq!(
             stub,
-            format!(
-                "server = \"slime.onix.computer\"\nusername = \"ada-grok\"\npassword_file = \"{}\"\n",
-                report.password_file.display()
-            )
+            "server = \"slime.onix.computer\"\nusername = \"ada-grok\"\n"
         );
         let human = report.human();
         assert!(human.contains(&report.endpoint_id));
         assert!(human.contains("username: ada-grok"));
         assert!(human.contains("owner: Ada"));
-        assert!(human.contains(&report.nix_allowed_peers));
-        assert!(human.contains(
-            "services.renews-iroh.bots.\"ada-grok\".passwordFile = \"/run/secrets/slime/ada-grok\";"
-        ));
         assert!(human.contains("iroh-news groups"));
-        assert!(!human.to_lowercase().contains("password ="));
+        assert!(!human.contains("password_file"));
         let json = serde_json::to_string(&report).unwrap();
         assert!(json.contains("\"config_written\":true"));
         assert!(json.contains("/run/secrets/slime/ada-grok"));

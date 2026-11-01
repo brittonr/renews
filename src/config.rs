@@ -106,6 +106,60 @@ pub struct IrohConfig {
     /// Wait up to 15s for an n0 relay before printing the ticket.
     #[serde(default = "default_true")]
     pub wait_for_relay: bool,
+
+    /// Unauthenticated join requests. Off unless explicitly enabled.
+    #[serde(default)]
+    pub join_requests: JoinRequestsConfig,
+}
+
+/// Limits for the public join channel.
+///
+/// When `enable` is true, any endpoint that can reach this server may submit
+/// one small join request. That channel cannot read or post articles.
+#[derive(Debug, Deserialize, Clone)]
+pub struct JoinRequestsConfig {
+    #[serde(default)]
+    pub enable: bool,
+    /// New submissions from one endpoint per hour. A status poll does not count.
+    #[serde(default = "default_join_per_endpoint")]
+    pub per_endpoint_per_hour: u32,
+    /// New submissions from all endpoints per hour.
+    #[serde(default = "default_join_global")]
+    pub global_per_hour: u32,
+    /// Maximum pending requests kept at once.
+    #[serde(default = "default_join_max_pending")]
+    pub max_pending: u32,
+    /// Drop pending requests older than this many days.
+    #[serde(default = "default_join_ttl_days")]
+    pub ttl_days: u32,
+}
+
+fn default_join_per_endpoint() -> u32 {
+    6
+}
+
+fn default_join_global() -> u32 {
+    60
+}
+
+fn default_join_max_pending() -> u32 {
+    100
+}
+
+fn default_join_ttl_days() -> u32 {
+    7
+}
+
+impl Default for JoinRequestsConfig {
+    fn default() -> Self {
+        Self {
+            enable: false,
+            per_endpoint_per_hour: default_join_per_endpoint(),
+            global_per_hour: default_join_global(),
+            max_pending: default_join_max_pending(),
+            ttl_days: default_join_ttl_days(),
+        }
+    }
 }
 
 impl Default for IrohConfig {
@@ -118,6 +172,7 @@ impl Default for IrohConfig {
             localhost_tcp: true,
             bind_addr: None,
             wait_for_relay: true,
+            join_requests: JoinRequestsConfig::default(),
         }
     }
 }
@@ -718,6 +773,7 @@ See 'examples/config.toml' for a valid configuration example."
         // whether the listener is running stay as they were at startup.
         self.iroh.allowed_peers = other.iroh.allowed_peers;
         self.iroh.admin_peers = other.iroh.admin_peers;
+        self.iroh.join_requests = other.iroh.join_requests;
     }
 }
 
@@ -915,6 +971,7 @@ mod tests {
         assert_eq!(config.user_limits.post_burst, 3);
         assert!(config.iroh.allowed_peers.is_empty());
         assert!(config.iroh.admin_peers.is_empty());
+        assert!(!config.iroh.join_requests.enable);
         assert_eq!(config.iroh.key_path, "/var/lib/renews/iroh.key");
 
         let config: Config = toml::from_str(

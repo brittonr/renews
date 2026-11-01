@@ -175,6 +175,26 @@ struct JoinBlock {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
+struct ApproveRequestArgs {
+    #[serde(default)]
+    endpoint_id: Option<String>,
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
+    rename: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+struct RejectRequestArgs {
+    #[serde(default)]
+    endpoint_id: Option<String>,
+    #[serde(default)]
+    name: Option<String>,
+    /// Must be true.
+    confirm: bool,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
 struct ApproveJoinArgs {
     /// Object printed by `iroh-news join --json`.
     block: JoinBlock,
@@ -587,6 +607,53 @@ impl AdminMcp {
             &self
                 .state
                 .admin("rate_limits", json!({}))
+                .await
+                .map_err(mcp_err)?,
+        )
+    }
+
+    #[tool(description = "List pending join requests.")]
+    async fn admin_list_join_requests(&self) -> Result<CallToolResult, McpError> {
+        ok_json(
+            &self
+                .state
+                .admin("list_join_requests", json!({}))
+                .await
+                .map_err(mcp_err)?,
+        )
+    }
+
+    #[tool(
+        description = "Approve a pending join request by endpoint_id or name. Optional rename. Allowlists the endpoint and creates a key-bound account. No password is returned."
+    )]
+    async fn admin_approve_join_request(
+        &self,
+        Parameters(args): Parameters<ApproveRequestArgs>,
+    ) -> Result<CallToolResult, McpError> {
+        ok_json(
+            &self
+                .state
+                .admin(
+                    "approve_join_request",
+                    json!({"endpoint_id": args.endpoint_id, "name": args.name, "rename": args.rename}),
+                )
+                .await
+                .map_err(mcp_err)?,
+        )
+    }
+
+    #[tool(description = "Reject a pending join request. Requires confirm: true.")]
+    async fn admin_reject_join_request(
+        &self,
+        Parameters(args): Parameters<RejectRequestArgs>,
+    ) -> Result<CallToolResult, McpError> {
+        ok_json(
+            &self
+                .state
+                .admin(
+                    "reject_join_request",
+                    json!({"endpoint_id": args.endpoint_id, "name": args.name, "confirm": args.confirm}),
+                )
                 .await
                 .map_err(mcp_err)?,
         )

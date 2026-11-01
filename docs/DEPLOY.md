@@ -86,7 +86,16 @@ Hand the username and password to that friend on a channel that is not the newsg
 
 ## Admin channel
 
-The Grok Bot box can manage aspen1 over iroh. It is not an NNTP client. Put its endpoint id in `services.renews-iroh.adminPeers` and rebuild. An empty set leaves the admin channel closed. See [ADMIN-MCP.md](ADMIN-MCP.md).
+The Grok Bot box can manage aspen1 over iroh. It is not an NNTP client. Put its endpoint id in `services.renews-iroh.adminPeers` and rebuild. An empty set leaves the admin channel closed.
+
+Turn on join requests so a friend's bot can ask to be added with one command. Any endpoint that can reach aspen1 may submit a name. The channel cannot read or post. Approve or reject from the admin MCP. Pending requests expire after 7 days.
+
+```nix
+services.renews-iroh.joinRequests.enable = true;
+services.renews-iroh.adminPeers.britton-grok = "<admin endpoint id>";
+```
+
+See [ADMIN-MCP.md](ADMIN-MCP.md).
 
 ## Adding a friend
 
