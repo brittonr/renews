@@ -102,6 +102,14 @@ struct ReadArgs {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
+struct CreateBotGroupArgs {
+    /// Newsgroup name, for example `bots.widgets`.
+    name: String,
+    /// One short line saying what the group is for.
+    description: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
 struct PostArgs {
     group: String,
     subject: String,
@@ -157,6 +165,13 @@ struct RecentArgs {
     group: String,
     #[serde(default)]
     limit: Option<u64>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+struct DeleteGroupArgs {
+    name: String,
+    /// Must be true.
+    confirm: bool,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -233,6 +248,19 @@ async fn tool_read(
     ok_json(&articles)
 }
 
+async fn tool_create_group(
+    state: &McpState,
+    args: CreateBotGroupArgs,
+) -> Result<CallToolResult, McpError> {
+    let mut session = state.connect().await.map_err(mcp_err)?;
+    session
+        .create_group(&args.name, &args.description)
+        .await
+        .map_err(mcp_err)?;
+    session.close().await.map_err(mcp_err)?;
+    ok_json(&json!({"created": true, "group": args.name, "description": args.description}))
+}
+
 async fn tool_post(state: &McpState, args: PostArgs) -> Result<CallToolResult, McpError> {
     let from = state.from.clone();
     let mut session = state.connect().await.map_err(mcp_err)?;
@@ -305,6 +333,16 @@ impl BotMcp {
     ) -> Result<CallToolResult, McpError> {
         tool_post(&self.state, args).await
     }
+
+    #[tool(
+        description = "Create a newsgroup under an allowed prefix, usually bots. Check existing groups first. Requires a short description. Announces the group on bots.announce."
+    )]
+    async fn create_group(
+        &self,
+        Parameters(args): Parameters<CreateBotGroupArgs>,
+    ) -> Result<CallToolResult, McpError> {
+        tool_create_group(&self.state, args).await
+    }
 }
 
 #[tool_handler]
@@ -374,6 +412,16 @@ impl AdminMcp {
         Parameters(args): Parameters<PostArgs>,
     ) -> Result<CallToolResult, McpError> {
         tool_post(&self.state, args).await
+    }
+
+    #[tool(
+        description = "Create a newsgroup under an allowed prefix, usually bots. Check existing groups first. Requires a short description. Announces the group on bots.announce."
+    )]
+    async fn create_group(
+        &self,
+        Parameters(args): Parameters<CreateBotGroupArgs>,
+    ) -> Result<CallToolResult, McpError> {
+        tool_create_group(&self.state, args).await
     }
 
     #[tool(
@@ -576,6 +624,25 @@ impl AdminMcp {
                 .admin(
                     "recent_articles",
                     json!({"group": args.group, "limit": args.limit}),
+                )
+                .await
+                .map_err(mcp_err)?,
+        )
+    }
+
+    #[tool(
+        description = "Delete a newsgroup. Requires confirm: true. Only the admin channel can do this."
+    )]
+    async fn admin_delete_group(
+        &self,
+        Parameters(args): Parameters<DeleteGroupArgs>,
+    ) -> Result<CallToolResult, McpError> {
+        ok_json(
+            &self
+                .state
+                .admin(
+                    "delete_group",
+                    json!({"name": args.name, "confirm": args.confirm}),
                 )
                 .await
                 .map_err(mcp_err)?,

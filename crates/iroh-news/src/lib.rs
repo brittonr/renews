@@ -132,7 +132,27 @@ impl Session {
     ///
     /// Returns an error if the server rejects the command.
     pub async fn groups(&mut self) -> anyhow::Result<Vec<GroupEntry>> {
-        self.client.list_active().await
+        let mut groups = self.client.list_active().await?;
+        if let Ok(catalog) = self.client.list_bot_groups().await {
+            for group in &mut groups {
+                if let Some((_, description, creator)) =
+                    catalog.iter().find(|(name, _, _)| name == &group.name)
+                {
+                    group.description.clone_from(description);
+                    group.creator.clone_from(creator);
+                }
+            }
+        }
+        Ok(groups)
+    }
+
+    /// Create a group. The account must already be authenticated.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the server rejects the name or the rate limit.
+    pub async fn create_group(&mut self, name: &str, description: &str) -> anyhow::Result<()> {
+        self.client.create_group(name, description).await
     }
 
     /// Read articles from `request.group`.

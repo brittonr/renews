@@ -555,6 +555,7 @@ impl AdminContext {
             "create_group" => self.create_group(args).await?,
             "recent_articles" => self.recent_articles(args).await?,
             "delete_article" => self.delete_article(args).await?,
+            "delete_group" => self.delete_group(args).await?,
             "rate_limits" => self.rate_limits().await?,
             "approve_join" => self.approve_join(args).await?,
             "list_join_requests" => self.list_join_requests().await?,
@@ -771,6 +772,17 @@ impl AdminContext {
         }
         self.storage.delete_article_by_id(message_id).await?;
         Ok(json!({"deleted": message_id}))
+    }
+
+    async fn delete_group(&self, args: &Value) -> anyhow::Result<Value> {
+        require_confirm(args)?;
+        let name = arg_str(args, "name")?;
+        crate::groups::validate_group_name(name)?;
+        if !self.storage.group_exists(name).await? {
+            bail!("no such group {name}");
+        }
+        self.storage.remove_group(name).await?;
+        Ok(json!({"deleted": name}))
     }
 
     async fn rate_limits(&self) -> anyhow::Result<Value> {

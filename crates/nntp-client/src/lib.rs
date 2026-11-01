@@ -17,6 +17,12 @@ pub struct GroupEntry {
     pub low: u64,
     /// Posting status (`y`, `n`, or `m`).
     pub posting: String,
+    /// Description stored for the group. Empty when the server has none.
+    #[serde(default)]
+    pub description: String,
+    /// Account that created the group. Empty for groups created before this was recorded.
+    #[serde(default)]
+    pub creator: String,
 }
 
 /// Result of a successful `GROUP` command.
@@ -115,6 +121,42 @@ where
     /// # Errors
     ///
     /// Returns an error if the server rejects the command or a row cannot be parsed.
+    /// `NEWGROUP name description`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the server rejects the name, the description, or the rate limit.
+    pub async fn create_group(&mut self, name: &str, description: &str) -> anyhow::Result<()> {
+        if description.contains('\r') || description.contains('\n') {
+            bail!("description must be one line");
+        }
+        let status = self
+            .command(&format!("NEWGROUP {name} {description}"))
+            .await?;
+        expect_code(&status, 231).with_context(|| format!("NEWGROUP: {status}"))?;
+        Ok(())
+    }
+
+    /// `LIST BOTGROUPS`. Rows are name, description, creator, created_at.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the server does not support the keyword.
+    pub async fn list_bot_groups(&mut self) -> anyhow::Result<Vec<(String, String, String)>> {
+        let status = self.command("LIST BOTGROUPS").await?;
+        expect_code(&status, 215)?;
+        let lines = self.read_dot_lines().await?;
+        let mut rows = Vec::new();
+        for line in lines {
+            let mut parts = line.split('\t');
+            let Some(name) = parts.next() else { continue };
+            let description = parts.next().unwrap_or("").to_string();
+            let creator = parts.next().unwrap_or("").to_string();
+            rows.push((name.to_string(), description, creator));
+        }
+        Ok(rows)
+    }
+
     pub async fn list_active(&mut self) -> anyhow::Result<Vec<GroupEntry>> {
         let status = self.command("LIST ACTIVE").await?;
         expect_code(&status, 215)?;
@@ -282,6 +324,8 @@ fn parse_active(line: &str) -> anyhow::Result<GroupEntry> {
         high,
         low,
         posting,
+        description: String::new(),
+        creator: String::new(),
     })
 }
 

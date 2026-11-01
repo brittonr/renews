@@ -563,4 +563,61 @@ impl Storage for PostgresStorage {
 
         Ok(overview_lines)
     }
+
+    async fn list_group_catalog(&self) -> Result<Vec<super::GroupCatalog>> {
+        let rows =
+            sqlx::query("SELECT name, description, creator, created_at FROM groups ORDER BY name")
+                .fetch_all(&self.pool)
+                .await?;
+        let mut out = Vec::with_capacity(rows.len());
+        for row in rows {
+            out.push(super::GroupCatalog {
+                name: row.try_get("name")?,
+                description: row.try_get("description")?,
+                creator: row.try_get("creator")?,
+                created_at: row.try_get("created_at")?,
+            });
+        }
+        Ok(out)
+    }
+
+    async fn create_bot_group(&self, group: &str, description: &str, creator: &str) -> Result<()> {
+        let now = chrono::Utc::now().timestamp();
+        sqlx::query(
+            "INSERT INTO groups (name, created_at, moderated, description, creator) VALUES ($1, $2, 0, $3, $4)",
+        )
+        .bind(group)
+        .bind(now)
+        .bind(description)
+        .bind(creator)
+        .execute(&self.pool)
+        .await?;
+        sqlx::query(
+            "INSERT INTO group_creations (username, group_name, created_at) VALUES ($1, $2, $3)",
+        )
+        .bind(creator)
+        .bind(group)
+        .bind(now)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    async fn count_groups(&self) -> Result<u64> {
+        let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM groups")
+            .fetch_one(&self.pool)
+            .await?;
+        Ok(u64::try_from(n).unwrap_or(0))
+    }
+
+    async fn group_creates_since(&self, username: &str, since: i64) -> Result<u64> {
+        let n: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM group_creations WHERE username = $1 AND created_at >= $2",
+        )
+        .bind(username)
+        .bind(since)
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(u64::try_from(n).unwrap_or(0))
+    }
 }

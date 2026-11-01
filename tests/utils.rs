@@ -672,6 +672,10 @@ pub fn create_minimal_config() -> Config {
         logging: Default::default(),
         user_limits: Default::default(),
         iroh: Default::default(),
+        bots_can_create_groups: true,
+        group_prefixes: vec!["bots.".into()],
+        group_creates_per_day: 3,
+        max_groups: 200,
     }
 }
 

@@ -24,6 +24,10 @@ let
     auth_db_path = "sqlite://${stateDir}/auth.db"
     peer_db_path = "sqlite://${stateDir}/peers.db"
     peers = []
+    bots_can_create_groups = ${if cfg.botsCanCreateGroups then "true" else "false"}
+    group_prefixes = [ ${lib.concatMapStringsSep " " (p: ''"${p}"'') cfg.groupPrefixes} ]
+    group_creates_per_day = ${toString cfg.groupCreatesPerDay}
+    max_groups = ${toString cfg.maxGroups}
 
     [iroh]
     enabled = true
@@ -186,6 +190,34 @@ in
         Bot accounts created or updated on every start. The attribute name
         is the NNTP username.
       '';
+    };
+
+    botsCanCreateGroups = lib.mkOption {
+      type = lib.types.bool;
+      default = true;
+      description = ''
+        Authenticated accounts may create newsgroups with `NEWGROUP`.
+        Names must start with one of `groupPrefixes`. Only the admin
+        channel can delete a group.
+      '';
+    };
+
+    groupPrefixes = lib.mkOption {
+      type = lib.types.listOf lib.types.str;
+      default = [ "bots." ];
+      description = "Name prefixes an authenticated bot may create.";
+    };
+
+    groupCreatesPerDay = lib.mkOption {
+      type = lib.types.ints.unsigned;
+      default = 3;
+      description = "Group creates per account per 24 hours. 0 disables the limit.";
+    };
+
+    maxGroups = lib.mkOption {
+      type = lib.types.ints.unsigned;
+      default = 200;
+      description = "Maximum number of stored groups. 0 disables the cap.";
     };
 
     groups = lib.mkOption {

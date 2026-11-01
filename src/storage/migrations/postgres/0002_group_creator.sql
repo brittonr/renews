@@ -1,0 +1,8 @@
+ALTER TABLE groups ADD COLUMN IF NOT EXISTS creator TEXT NOT NULL DEFAULT '';
+
+CREATE TABLE IF NOT EXISTS group_creations (
+    id BIGSERIAL PRIMARY KEY,
+    username TEXT NOT NULL,
+    group_name TEXT NOT NULL,
+    created_at BIGINT NOT NULL
+);

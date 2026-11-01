@@ -48,6 +48,10 @@ async fn setup_queue_enabled_server() -> (std::net::SocketAddr, Arc<dyn Storage>
         logging: Default::default(),
         user_limits: Default::default(),
         iroh: Default::default(),
+        bots_can_create_groups: true,
+        group_prefixes: vec!["bots.".into()],
+        group_creates_per_day: 3,
+        max_groups: 200,
     };
 
     // Since we can't easily test with TLS in this setup, we'll create a simplified server

@@ -61,6 +61,18 @@ fn default_true() -> bool {
 }
 
 /// Sustained posts per account per minute. Six is about one post every ten seconds.
+fn default_group_prefixes() -> Vec<String> {
+    vec!["bots.".into()]
+}
+
+fn default_group_creates_per_day() -> u32 {
+    3
+}
+
+fn default_max_groups() -> u32 {
+    200
+}
+
 fn default_post_rate_per_minute() -> u32 {
     6
 }
@@ -473,6 +485,19 @@ pub struct Config {
     #[serde(default)]
     pub user_limits: UserLimitsConfig,
 
+    /// Authenticated non-admin accounts may create groups with `NEWGROUP`.
+    #[serde(default = "default_true")]
+    pub bots_can_create_groups: bool,
+    /// Allowed name prefixes. A name must start with one of these.
+    #[serde(default = "default_group_prefixes")]
+    pub group_prefixes: Vec<String>,
+    /// Group creates per account per 24 hours. `0` disables the limit.
+    #[serde(default = "default_group_creates_per_day")]
+    pub group_creates_per_day: u32,
+    /// Maximum stored groups. `0` disables the cap.
+    #[serde(default = "default_max_groups")]
+    pub max_groups: u32,
+
     /// iroh (QUIC) listener. Requires the `iroh` cargo feature to take effect.
     #[serde(default)]
     pub iroh: IrohConfig,
@@ -769,6 +794,10 @@ See 'examples/config.toml' for a valid configuration example."
         self.allow_auth_insecure_connections = other.allow_auth_insecure_connections;
         self.allow_anonymous_posting = other.allow_anonymous_posting;
         self.user_limits = other.user_limits;
+        self.bots_can_create_groups = other.bots_can_create_groups;
+        self.group_prefixes = other.group_prefixes;
+        self.group_creates_per_day = other.group_creates_per_day;
+        self.max_groups = other.max_groups;
         // Allowlist updates apply to new iroh connections. The key path and
         // whether the listener is running stay as they were at startup.
         self.iroh.allowed_peers = other.iroh.allowed_peers;

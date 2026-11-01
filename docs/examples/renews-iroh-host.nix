@@ -23,6 +23,8 @@
     # Any endpoint that can reach this host may submit a join request.
     # Approval still happens through the admin MCP. The channel cannot read or post.
     joinRequests.enable = true;
+    botsCanCreateGroups = true;
+    groupPrefixes = [ "bots." ];
     siteName = "aspen1.bots.local";
     listenAddress = "127.0.0.1:119";
     groups = [

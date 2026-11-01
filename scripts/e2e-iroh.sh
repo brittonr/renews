@@ -41,6 +41,10 @@ site_name = "bots.local"
 db_path = "sqlite://$tmp/news.db"
 auth_db_path = "sqlite://$tmp/auth.db"
 peer_db_path = "sqlite://$tmp/peers.db"
+bots_can_create_groups = true
+group_prefixes = ["bots."]
+group_creates_per_day = 1
+max_groups = 200
 
 [iroh]
 enabled = true
@@ -61,6 +65,7 @@ EOF
 
 "$renews" --config "$tmp/renews.toml" --init
 "$renews" --config "$tmp/renews.toml" admin add-group bots.general
+"$renews" --config "$tmp/renews.toml" admin add-group bots.announce
 "$renews" --config "$tmp/renews.toml" admin add-user bot --password-file "$tmp/pass"
 
 "$renews" --config "$tmp/renews.toml" > "$tmp/server.log" 2>&1 &
@@ -108,6 +113,17 @@ done
 if [ -z "$found" ]; then
   echo "posted article was not read back" >&2
   printf '%s\n' "$out" >&2
+  exit 1
+fi
+
+"$news" --config "$tmp/bot.toml" --state-dir "$tmp/state-a" --no-relays group create bots.widgets --description 'widget notes'
+"$news" --config "$tmp/bot.toml" --state-dir "$tmp/state-a" --no-relays groups | grep -q '"creator":"bot"'
+if "$news" --config "$tmp/bot.toml" --state-dir "$tmp/state-a" --no-relays group create bots.other --description 'second'; then
+  echo "group creation rate limit did not trip" >&2
+  exit 1
+fi
+if "$news" --config "$tmp/bot.toml" --state-dir "$tmp/state-a" --no-relays group create general --description 'nope'; then
+  echo "group outside bots. was accepted" >&2
   exit 1
 fi
 
@@ -248,6 +264,10 @@ if "$news" --config "$tmp/admin.toml" --state-dir "$tmp/state-fresh" --no-relays
   echo "pending join was allowed onto the admin channel" >&2
   exit 1
 fi
+if "$news" --config "$tmp/fresh.toml" --state-dir "$tmp/state-fresh" --no-relays group create bots.sneak --description 'nope'; then
+  echo "pending peer created a group" >&2
+  exit 1
+fi
 python3 - "$news" "$tmp/admin.toml" "$tmp/state-admin" "$fresh_id" <<'PY'
 import json, subprocess, sys
 news, config, state, endpoint_id = sys.argv[1:]
@@ -272,8 +292,8 @@ proc.stdin.close()
 proc.wait(timeout=20)
 print("approve ok")
 PY
-"$news" --config "$tmp/fresh.toml" --state-dir "$tmp/state-fresh" --no-relays groups | grep -q 'bots.general'
-printf '%s\n' 'joined without a password' | "$news" --config "$tmp/fresh.toml" --state-dir "$tmp/state-fresh" --no-relays post --group bots.general --subject 'key auth'
+"$news" --config "$tmp/fresh.toml" --state-dir "$tmp/state-fresh" --no-relays groups | grep -q 'bots.widgets'
+printf '%s\n' 'saw the new group' | "$news" --config "$tmp/fresh.toml" --state-dir "$tmp/state-fresh" --no-relays post --group bots.widgets --subject 'from joiner'
 if "$news" --state-dir "$tmp/state-spoof" --no-relays --server "$ticket" join --name joiner --owner Eve --json; then
   echo "second endpoint took an approved name" >&2
   exit 1

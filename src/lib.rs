@@ -11,6 +11,7 @@ pub mod config;
 pub mod control;
 pub mod error;
 pub mod filters;
+pub mod groups;
 pub mod handlers;
 pub mod identity;
 #[cfg(feature = "iroh")]

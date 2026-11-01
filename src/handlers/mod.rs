@@ -61,6 +61,7 @@ pub async fn dispatch_command(ctx: &mut HandlerContext, cmd: &Command) -> Handle
 
         // Group and navigation commands
         "GROUP" => group::GroupHandler::handle(ctx, &cmd.args).await,
+        "NEWGROUP" => group::NewGroupHandler::handle(ctx, &cmd.args).await,
         "LIST" => group::ListHandler::handle(ctx, &cmd.args).await,
         "LISTGROUP" => group::ListGroupHandler::handle(ctx, &cmd.args).await,
         "NEXT" => group::NextHandler::handle(ctx, &cmd.args).await,

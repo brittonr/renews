@@ -72,6 +72,9 @@ impl CommandHandler for ListHandler {
                 "HEADERS" => {
                     handle_list_headers(ctx).await?;
                 }
+                "BOTGROUPS" => {
+                    handle_list_bot_groups(ctx).await?;
+                }
                 "DISTRIB.PATS" => {
                     write_simple(&mut ctx.writer, RESP_503_NOT_SUPPORTED).await?;
                 }
@@ -255,6 +258,109 @@ async fn handle_list_active(ctx: &mut HandlerContext, pattern: Option<&String>) 
 
     ctx.writer.write_all(RESP_DOT_CRLF.as_bytes()).await?;
     Ok(())
+}
+
+async fn handle_list_bot_groups(ctx: &mut HandlerContext) -> HandlerResult {
+    let catalog = ctx.storage.list_group_catalog().await?;
+    ctx.writer
+        .write_all(RESP_215_INFO_FOLLOWS.as_bytes())
+        .await?;
+    for row in catalog {
+        let line = format!(
+            "{}\t{}\t{}\t{}\r\n",
+            row.name, row.description, row.creator, row.created_at
+        );
+        ctx.writer.write_all(line.as_bytes()).await?;
+    }
+    ctx.writer.write_all(RESP_DOT_CRLF.as_bytes()).await?;
+    Ok(())
+}
+
+/// `NEWGROUP name description...` creates a group for an authenticated account.
+pub struct NewGroupHandler;
+
+impl CommandHandler for NewGroupHandler {
+    async fn handle(ctx: &mut HandlerContext, args: &[String]) -> HandlerResult {
+        if !ctx.session.is_authenticated() {
+            write_simple(&mut ctx.writer, RESP_480_AUTH_REQUIRED).await?;
+            return Ok(());
+        }
+        let Some(name) = args.first() else {
+            write_simple(&mut ctx.writer, RESP_501_NOT_ENOUGH).await?;
+            return Ok(());
+        };
+        let description = args.iter().skip(1).cloned().collect::<Vec<_>>().join(" ");
+        let (enabled, prefixes, per_day, max_groups, site) = {
+            let cfg = ctx.config.read().await;
+            (
+                cfg.bots_can_create_groups,
+                cfg.group_prefixes.clone(),
+                cfg.group_creates_per_day,
+                cfg.max_groups,
+                cfg.site_name.clone(),
+            )
+        };
+        let username = ctx.session.username().unwrap_or("").to_string();
+        let since = chrono::Utc::now().timestamp().saturating_sub(86_400);
+        let creates_today = ctx.storage.group_creates_since(&username, since).await?;
+        let group_count = ctx.storage.count_groups().await?;
+        if let Err(err) = crate::groups::check_new_group(
+            &crate::groups::GroupCreatePolicy {
+                enabled,
+                prefixes: &prefixes,
+                group_count,
+                creates_today,
+                max_groups,
+                creates_per_day: per_day,
+                is_admin: ctx.session.is_admin(),
+            },
+            name,
+            &description,
+        ) {
+            tracing::info!(group = %name, error = %err, "NEWGROUP rejected");
+            write_simple(&mut ctx.writer, &format!("441 {err}\r\n")).await?;
+            return Ok(());
+        }
+        if ctx.storage.group_exists(name).await? {
+            write_simple(&mut ctx.writer, "441 group already exists\r\n").await?;
+            return Ok(());
+        }
+        if let Err(err) = ctx
+            .storage
+            .create_bot_group(name, &description, &username)
+            .await
+        {
+            tracing::info!(group = %name, error = %err, "NEWGROUP failed");
+            write_simple(&mut ctx.writer, "441 group creation failed\r\n").await?;
+            return Ok(());
+        }
+        if ctx.storage.group_exists("bots.announce").await? {
+            let mut message = crate::Message {
+                headers: smallvec::smallvec![
+                    ("From".into(), format!("{username}@bots.local")),
+                    ("Newsgroups".into(), "bots.announce".into()),
+                    ("Subject".into(), format!("new group {name}")),
+                    (
+                        "Message-ID".into(),
+                        format!(
+                            "<newgroup.{}.{}@{}>",
+                            name.replace('.', "-"),
+                            chrono::Utc::now().timestamp_millis(),
+                            site
+                        )
+                    ),
+                ],
+                body: format!("{username} created {name}\n\n{description}\n"),
+            };
+            crate::parse::ensure_date(&mut message);
+            if let Err(err) = ctx.storage.store_article(&message).await {
+                tracing::warn!(error = %err, "failed to announce new group");
+            }
+        }
+        tracing::info!(group = %name, creator = %username, "group created");
+        write_simple(&mut ctx.writer, &format!("231 {name} group created\r\n")).await?;
+        Ok(())
+    }
 }
 
 async fn handle_list_newsgroups(ctx: &mut HandlerContext) -> HandlerResult {

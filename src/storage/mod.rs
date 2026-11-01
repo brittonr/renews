@@ -98,6 +98,27 @@ pub trait Storage: Send + Sync {
 
     /// Retrieve all newsgroups with their descriptions
     fn list_groups_with_descriptions(&self) -> GroupDescriptionStream<'_>;
+
+    /// Catalog rows for `LIST BOTGROUPS`: name, description, creator, created_at.
+    async fn list_group_catalog(&self) -> Result<Vec<GroupCatalog>>;
+
+    /// Insert a group owned by `creator` and record the creation.
+    async fn create_bot_group(&self, group: &str, description: &str, creator: &str) -> Result<()>;
+
+    /// Number of groups currently stored.
+    async fn count_groups(&self) -> Result<u64>;
+
+    /// How many groups `username` created at or after `since` (unix seconds).
+    async fn group_creates_since(&self, username: &str, since: i64) -> Result<u64>;
+}
+
+/// One newsgroup plus who created it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GroupCatalog {
+    pub name: String,
+    pub description: String,
+    pub creator: String,
+    pub created_at: i64,
 }
 
 pub type DynStorage = Arc<dyn Storage>;

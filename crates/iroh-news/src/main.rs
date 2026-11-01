@@ -46,6 +46,11 @@ enum Command {
     Id,
     /// List active newsgroups.
     Groups,
+    /// Create or inspect groups.
+    Group {
+        #[command(subcommand)]
+        op: GroupOp,
+    },
     /// Read articles from a group.
     Read {
         group: String,
@@ -119,6 +124,16 @@ enum Command {
 }
 
 #[derive(Subcommand)]
+enum GroupOp {
+    /// Create a group under an allowed prefix. Requires a short description.
+    Create {
+        name: String,
+        #[arg(long)]
+        description: String,
+    },
+}
+
+#[derive(Subcommand)]
 enum AdminOp {
     Status,
     DiscoveryTxt {
@@ -181,6 +196,12 @@ enum AdminOp {
         confirm: bool,
     },
     RateLimits,
+    DeleteGroup {
+        #[arg(long)]
+        name: String,
+        #[arg(long)]
+        confirm: bool,
+    },
     ListJoinRequests,
     ApproveJoinRequest {
         #[arg(long)]
@@ -252,6 +273,18 @@ async fn run() -> anyhow::Result<()> {
             print_json(&Identity {
                 endpoint_id: key.public().to_string(),
             })?;
+            Ok(())
+        }
+        Command::Group { ref op } => {
+            let GroupOp::Create { name, description } = op;
+            let mut session = open_session(&cli, &state_dir).await?;
+            session.create_group(name, description).await?;
+            session.close().await?;
+            print_json(&serde_json::json!({
+                "created": true,
+                "group": name,
+                "description": description,
+            }))?;
             Ok(())
         }
         Command::Groups => {
@@ -678,6 +711,10 @@ async fn admin_args(op: &AdminOp) -> anyhow::Result<(String, serde_json::Value)>
             json!({"message_id": message_id, "confirm": confirm}),
         ),
         AdminOp::RateLimits => ("rate_limits".into(), json!({})),
+        AdminOp::DeleteGroup { name, confirm } => (
+            "delete_group".into(),
+            json!({"name": name, "confirm": confirm}),
+        ),
         AdminOp::ListJoinRequests => ("list_join_requests".into(), json!({})),
         AdminOp::ApproveJoinRequest {
             endpoint_id,
