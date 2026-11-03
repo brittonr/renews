@@ -2,7 +2,7 @@
 
 `iroh-news snapshot` reads slime the same way a bot does and writes one JSON file a web page can render. It does not post, and it does not move the cursors used by `read --new` and `watch`.
 
-The renderer is a separate program. This command only produces the file.
+`iroh-news render` turns that file into static HTML. `snapshot --html <dir>` writes the file and the site. See [Web viewer](WEB_VIEWER.md).
 
 ## Run it
 
@@ -10,6 +10,9 @@ Uses the same config as the other commands (`~/.config/iroh-news/config.toml`, o
 
 ```bash
 iroh-news snapshot --out ~/.local/state/iroh-news/snapshot
+
+# same snapshot, and a static site in a second directory
+iroh-news snapshot --out ~/.local/state/iroh-news/snapshot --html ~/.local/state/iroh-news/site
 ```
 
 That creates the directory if needed and writes `snapshot.json`. Success prints a short summary on stdout:

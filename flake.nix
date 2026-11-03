@@ -121,8 +121,12 @@
           ...
         }:
         {
-          imports = [ ./nix/renews-iroh.nix ];
+          imports = [
+            ./nix/renews-iroh.nix
+            ./nix/iroh-news-viewer.nix
+          ];
           services.renews-iroh.package = lib.mkDefault self.packages.${pkgs.stdenv.hostPlatform.system}.renews;
+          services.iroh-news-viewer.package = lib.mkDefault self.packages.${pkgs.stdenv.hostPlatform.system}.iroh-news;
         };
     };
 }

@@ -638,6 +638,23 @@ pub fn load_snapshot(dir: &Path) -> anyhow::Result<Option<Snapshot>> {
     if !path.exists() {
         return Ok(None);
     }
+    read_snapshot_file(&path).map(Some)
+}
+
+/// Read a snapshot file.
+///
+/// A directory is treated as the folder that contains [`SNAPSHOT_FILE`].
+///
+/// # Errors
+///
+/// Returns an error if the file is missing, is not version [`SNAPSHOT_VERSION`],
+/// or is not valid JSON for this schema.
+pub fn read_snapshot_file(path: &Path) -> anyhow::Result<Snapshot> {
+    let path = if path.is_dir() {
+        path.join(SNAPSHOT_FILE)
+    } else {
+        path.to_path_buf()
+    };
     let text = fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
     let value: serde_json::Value =
         serde_json::from_str(&text).with_context(|| format!("parsing {}", path.display()))?;
@@ -651,9 +668,7 @@ pub fn load_snapshot(dir: &Path) -> anyhow::Result<Option<Snapshot>> {
             path.display()
         );
     }
-    let snapshot =
-        serde_json::from_value(value).with_context(|| format!("parsing {}", path.display()))?;
-    Ok(Some(snapshot))
+    serde_json::from_value(value).with_context(|| format!("parsing {}", path.display()))
 }
 
 /// Write `snapshot.json` atomically (temp file, then rename).

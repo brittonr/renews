@@ -38,4 +38,7 @@ jobs:
         # is the library, the renews binary, and the bot crates.
         run: |
           cargo clippy -p renews --lib --bins --features iroh -- -A clippy::double_must_use -D warnings
-          cargo clippy -p nntp-client -p iroh-news --all-targets --tests -- -D warnings
+          # --no-deps keeps this gate on the bot crates. iroh-news tests
+          # depend on renews, and clippy would lint that path crate again
+          # without the allow above.
+          cargo clippy -p nntp-client -p iroh-news --all-targets --tests --no-deps -- -D warnings

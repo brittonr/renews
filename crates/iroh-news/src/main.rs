@@ -82,6 +82,23 @@ enum Command {
         /// Other groups already in the snapshot are left unchanged.
         #[arg(long = "group")]
         groups: Vec<String>,
+        /// Also write a static HTML site to this directory.
+        ///
+        /// Must be a different directory from `--out`. Same result as
+        /// `iroh-news render`.
+        #[arg(long, value_name = "DIR")]
+        html: Option<PathBuf>,
+    },
+    /// Write a static HTML site from a snapshot file.
+    ///
+    /// Does not dial the server. Every snapshot string is escaped.
+    Render {
+        /// Path to `snapshot.json`, or a directory that contains it.
+        #[arg(long)]
+        snapshot: PathBuf,
+        /// Directory for the site. Replaced on each run.
+        #[arg(long)]
+        out: PathBuf,
     },
     /// Post an article. The body is read from stdin.
     Post {
@@ -352,7 +369,12 @@ async fn run() -> anyhow::Result<()> {
             ref out,
             full,
             ref groups,
+            ref html,
         } => {
+            if let Some(html) = html {
+                let snapshot_file = out.join(iroh_news::snapshot::SNAPSHOT_FILE);
+                refuse_html_over_snapshot(&snapshot_file, html)?;
+            }
             let previous = iroh_news::snapshot::load_snapshot(out)?;
             let mut session = open_session(&cli, &state_dir).await?;
             let fetched = iroh_news::snapshot::fetch_snapshot(
@@ -367,8 +389,14 @@ async fn run() -> anyhow::Result<()> {
             .await?;
             session.close().await?;
             let path = iroh_news::snapshot::write_snapshot(out, &fetched.snapshot)?;
+            let html_path = if let Some(html) = html {
+                let rendered = iroh_news::render::render_site(&fetched.snapshot, html)?;
+                Some(rendered.directory)
+            } else {
+                None
+            };
             let counts = fetched.snapshot.counts();
-            print_json(&serde_json::json!({
+            let mut summary = serde_json::json!({
                 "version": fetched.snapshot.version,
                 "path": path.display().to_string(),
                 "incremental": fetched.snapshot.incremental,
@@ -376,6 +404,34 @@ async fn run() -> anyhow::Result<()> {
                 "threads": counts.threads,
                 "articles": counts.articles,
                 "fetched_articles": fetched.fetched_articles,
+            });
+            if let Some(html_path) = html_path {
+                summary["html"] = serde_json::Value::String(html_path.display().to_string());
+            }
+            print_json(&summary)?;
+            Ok(())
+        }
+        Command::Render {
+            ref snapshot,
+            ref out,
+        } => {
+            let snapshot_path = if snapshot.is_dir() {
+                snapshot.join(iroh_news::snapshot::SNAPSHOT_FILE)
+            } else {
+                snapshot.clone()
+            };
+            refuse_html_over_snapshot(&snapshot_path, out)?;
+            let loaded = iroh_news::snapshot::read_snapshot_file(&snapshot_path)?;
+            let rendered = iroh_news::render::render_site(&loaded, out)?;
+            let counts = loaded.counts();
+            print_json(&serde_json::json!({
+                "version": loaded.version,
+                "path": rendered.directory.display().to_string(),
+                "groups": counts.groups,
+                "threads": counts.threads,
+                "articles": counts.articles,
+                "files": rendered.files,
+                "generated_at": loaded.generated_at,
             }))?;
             Ok(())
         }
@@ -865,6 +921,17 @@ fn prompt_username() -> anyhow::Result<String> {
         bail!("username is required");
     }
     Ok(name.to_string())
+}
+
+fn refuse_html_over_snapshot(snapshot_file: &Path, site_dir: &Path) -> anyhow::Result<()> {
+    if iroh_news::render::site_replaces_snapshot(snapshot_file, site_dir) {
+        bail!(
+            "HTML directory {} would replace snapshot {}; choose a different directory",
+            site_dir.display(),
+            snapshot_file.display()
+        );
+    }
+    Ok(())
 }
 
 fn print_json(value: &impl Serialize) -> anyhow::Result<()> {

@@ -1,0 +1,8 @@
+# Static site for the slime web viewer. No Worker script.
+# publish.sh rewrites `name` and [assets].directory when it deploys.
+# Keep compatibility_date in sync with the fallback in publish.sh.
+name = "slime-viewer"
+compatibility_date = "2026-11-03"
+
+[assets]
+directory = "./site"
