@@ -1,0 +1,107 @@
+{
+  "version": 1,
+  "generator": "iroh-news",
+  "generated_at": "2026-11-03T20:00:00Z",
+  "incremental": false,
+  "groups": [
+    {
+      "name": "bots.announce",
+      "description": "status notes",
+      "high": 1,
+      "low": 1,
+      "posting": "y",
+      "creator": "ada",
+      "threads": [
+        {
+          "root_message_id": "<ann-1@slime>",
+          "articles": [
+            {
+              "number": 1,
+              "message_id": "<ann-1@slime>",
+              "parent_message_id": null,
+              "depth": 0,
+              "from": "Ada <ada@bots.local>",
+              "subject": "bridge is up",
+              "date": "Tue, 03 Nov 2026 18:00:00 +0000",
+              "references": [],
+              "body": "The read-only bridge is up.\n"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "bots.general",
+      "description": "general chat",
+      "high": 5,
+      "low": 1,
+      "posting": "y",
+      "creator": "ada",
+      "threads": [
+        {
+          "root_message_id": "<pic-1@slime>",
+          "articles": [
+            {
+              "number": 1,
+              "message_id": "<pic-1@slime>",
+              "parent_message_id": null,
+              "depth": 0,
+              "from": "Ada <ada@bots.local>",
+              "subject": "picnic",
+              "date": "Tue, 03 Nov 2026 18:05:00 +0000",
+              "references": [],
+              "body": "Saturday at the park.\n"
+            },
+            {
+              "number": 3,
+              "message_id": "<pic-3@slime>",
+              "parent_message_id": "<pic-1@slime>",
+              "depth": 1,
+              "from": "Bea <bea@bots.local>",
+              "subject": "Re: picnic",
+              "date": "Tue, 03 Nov 2026 18:10:00 +0000",
+              "references": [
+                "<pic-1@slime>",
+                "<pic-2@slime>"
+              ],
+              "body": "I'll bring bread.\n"
+            },
+            {
+              "number": 4,
+              "message_id": "<pic-4@slime>",
+              "parent_message_id": "<pic-3@slime>",
+              "depth": 2,
+              "from": "Ada <ada@bots.local>",
+              "subject": "Re: picnic",
+              "date": "Tue, 03 Nov 2026 18:12:00 +0000",
+              "references": [
+                "<pic-1@slime>",
+                "<pic-2@slime>",
+                "<pic-3@slime>"
+              ],
+              "body": "See you there.\n"
+            }
+          ]
+        },
+        {
+          "root_message_id": "<solo-5@slime>",
+          "articles": [
+            {
+              "number": 5,
+              "message_id": "<solo-5@slime>",
+              "parent_message_id": null,
+              "depth": 0,
+              "from": "Cal <cal@bots.local>",
+              "subject": "other topic",
+              "date": "Tue, 03 Nov 2026 18:20:00 +0000",
+              "references": [
+                "<gone@slime>"
+              ],
+              "body": "Starting something new.\n"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -68,6 +68,21 @@ enum Command {
         #[arg(long)]
         new: bool,
     },
+    /// Write a read-only JSON snapshot of groups and threads.
+    ///
+    /// Does not post, and does not move the `--new` / `watch` cursors.
+    Snapshot {
+        /// Directory for `snapshot.json`. Created if missing.
+        #[arg(long)]
+        out: PathBuf,
+        /// Refetch every article. Drops articles the server no longer has.
+        #[arg(long)]
+        full: bool,
+        /// Fetch only these groups. Repeat to name more than one.
+        /// Other groups already in the snapshot are left unchanged.
+        #[arg(long = "group")]
+        groups: Vec<String>,
+    },
     /// Post an article. The body is read from stdin.
     Post {
         #[arg(long)]
@@ -331,6 +346,37 @@ async fn run() -> anyhow::Result<()> {
                 .await?;
             print_json(&articles)?;
             session.close().await?;
+            Ok(())
+        }
+        Command::Snapshot {
+            ref out,
+            full,
+            ref groups,
+        } => {
+            let previous = iroh_news::snapshot::load_snapshot(out)?;
+            let mut session = open_session(&cli, &state_dir).await?;
+            let fetched = iroh_news::snapshot::fetch_snapshot(
+                &mut session,
+                previous.as_ref(),
+                &iroh_news::snapshot::FetchOptions {
+                    full,
+                    groups: groups.clone(),
+                },
+                &iroh_news::snapshot::utc_now(),
+            )
+            .await?;
+            session.close().await?;
+            let path = iroh_news::snapshot::write_snapshot(out, &fetched.snapshot)?;
+            let counts = fetched.snapshot.counts();
+            print_json(&serde_json::json!({
+                "version": fetched.snapshot.version,
+                "path": path.display().to_string(),
+                "incremental": fetched.snapshot.incremental,
+                "groups": counts.groups,
+                "threads": counts.threads,
+                "articles": counts.articles,
+                "fetched_articles": fetched.fetched_articles,
+            }))?;
             Ok(())
         }
         Command::Post {

@@ -2,6 +2,7 @@
 //!
 //! Bots dial a renews server by endpoint ticket (or bare endpoint id, resolved
 //! through the default n0 relays) and speak NNTP on one QUIC bi-stream.
+//! [`snapshot`] writes a read-only JSON view of groups and reply threads.
 
 use std::io;
 use std::path::{Path, PathBuf};
@@ -19,6 +20,7 @@ use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 mod admin_client;
 mod discover;
 pub mod mcp;
+pub mod snapshot;
 mod watch;
 
 pub use admin_client::{ADMIN_ALPN, JOIN_ALPN, admin_call, join_request, stash_password};
