@@ -14,7 +14,7 @@ use std::task::{Context, Poll, ready};
 use std::time::Duration;
 
 use anyhow::Context as _;
-use iroh::endpoint::{Accepting, Connection, RelayMode, presets};
+use iroh::endpoint::{Accepting, Connection, PortmapperConfig, RelayMode, presets};
 use iroh::protocol::{AcceptError, ProtocolHandler, Router};
 use iroh::{Endpoint, EndpointAddr, EndpointId, SecretKey};
 use iroh_tickets::Ticket;
@@ -148,8 +148,10 @@ fn write_secret_key(path: &Path, bytes: &[u8; 32]) -> anyhow::Result<()> {
 ///
 /// Returns an error if the endpoint cannot bind.
 pub async fn serve(parts: IrohParts, bind: IrohBind) -> anyhow::Result<IrohServer> {
+    // Without relays, also skip UPnP/PCP/NAT-PMP: a relay-less server is meant
+    // to be reached only at its bind address, not through a router mapping.
     let preset_builder = if matches!(bind.relay_mode, RelayMode::Disabled) {
-        Endpoint::builder(presets::Minimal)
+        Endpoint::builder(presets::Minimal).portmapper_config(PortmapperConfig::Disabled)
     } else {
         Endpoint::builder(presets::N0)
     };
@@ -157,7 +159,10 @@ pub async fn serve(parts: IrohParts, bind: IrohBind) -> anyhow::Result<IrohServe
         .secret_key(bind.secret_key)
         .relay_mode(bind.relay_mode);
     if let Some(addr) = bind.bind_addr {
+        // The builder starts with sockets on 0.0.0.0 and [::]. Drop both, or
+        // the other address family stays bound on every interface.
         builder = builder
+            .clear_ip_transports()
             .bind_addr(addr)
             .map_err(|err| anyhow::anyhow!("iroh bind address {addr}: {err}"))?;
     }

@@ -743,10 +743,11 @@ async fn run() -> anyhow::Result<()> {
                 .unwrap_or_else(|| iroh_news::DEFAULT_JOIN_SERVER.to_string());
             let resolved =
                 discover(&server, &state_dir, discovery_mode(&cli, file.as_ref())?).await?;
-            let qname = if resolved.source == iroh_news::DiscoverySource::Direct {
-                serde_json::Value::Null
-            } else {
-                serde_json::Value::String(discovery_qname(server.trim()))
+            let qname = match resolved.source {
+                iroh_news::DiscoverySource::Direct | iroh_news::DiscoverySource::Host => {
+                    serde_json::Value::Null
+                }
+                _ => serde_json::Value::String(discovery_qname(server.trim())),
             };
             print_json(&serde_json::json!({
                 "server": server,

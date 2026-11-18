@@ -11,7 +11,7 @@ use std::pin::Pin;
 use std::task::{Context, Poll, ready};
 
 use anyhow::{Context as _, bail};
-use iroh::endpoint::{Connection, RelayMode, presets};
+use iroh::endpoint::{Connection, PortmapperConfig, RelayMode, presets};
 use iroh::protocol::Router;
 use iroh::{Endpoint, SecretKey};
 use nntp_client::NntpClient;
@@ -49,7 +49,9 @@ pub(crate) async fn bind_client_endpoint(
     let builder = if relays {
         Endpoint::builder(presets::N0)
     } else {
-        Endpoint::builder(presets::Minimal).relay_mode(RelayMode::Disabled)
+        Endpoint::builder(presets::Minimal)
+            .relay_mode(RelayMode::Disabled)
+            .portmapper_config(PortmapperConfig::Disabled)
     };
     builder
         .secret_key(secret_key)

@@ -106,6 +106,16 @@ if [ -z "$ticket" ]; then
   exit 1
 fi
 
+# With bind_addr set, the iroh socket is the only UDP socket: no 0.0.0.0 or
+# [::] listener beside it.
+if command -v ss > /dev/null; then
+  udp=$(ss -uanp | grep "pid=$srv," | awk '{print $4}' | sort -u | tr '\n' ' ')
+  if [ "$udp" != "127.0.0.1:41119 " ]; then
+    echo "renews bound UDP sockets beyond bind_addr: $udp" >&2
+    exit 1
+  fi
+fi
+
 cat > "$tmp/bot.toml" <<EOF
 server = "$ticket"
 username = "bot"
