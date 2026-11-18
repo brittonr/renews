@@ -268,12 +268,14 @@ let
     unitName: server:
     let
       stateDir = "/var/lib/${server.stateDirectory}";
-      peerLines = lib.concatStringsSep "\n" (
+      # TOML array elements need commas between them. One element renders
+      # without one, so a single-entry list keeps its earlier bytes.
+      peerLines = lib.concatStringsSep ",\n" (
         lib.mapAttrsToList (name: id: ''
           # ${name}
           "${id}"'') server.allowedPeers
       );
-      adminPeerLines = lib.concatStringsSep "\n" (
+      adminPeerLines = lib.concatStringsSep ",\n" (
         lib.mapAttrsToList (name: id: ''
           # ${name}
           "${id}"'') server.adminPeers
@@ -287,7 +289,7 @@ let
       peer_db_path = "sqlite://${stateDir}/peers.db"
       peers = []
       bots_can_create_groups = ${if server.botsCanCreateGroups then "true" else "false"}
-      group_prefixes = [ ${lib.concatMapStringsSep " " (p: ''"${p}"'') server.groupPrefixes} ]
+      group_prefixes = [ ${lib.concatMapStringsSep ", " (p: ''"${p}"'') server.groupPrefixes} ]
       group_creates_per_day = ${toString server.groupCreatesPerDay}
       max_groups = ${toString server.maxGroups}
 

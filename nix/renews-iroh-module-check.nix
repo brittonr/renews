@@ -1,7 +1,8 @@
 # Evaluation check for nix/renews-iroh.nix. The top-level server and a named
 # instance must render separate units, state directories, configs, and
 # credentials, and two servers that share a state directory or listen
-# address must fail their assertions. A stub package keeps this from
+# address must fail their assertions. Both configs must parse as TOML,
+# including arrays with more than one entry. A stub package keeps this from
 # building renews.
 {
   lib,
@@ -11,6 +12,7 @@
 }:
 let
   peer = "0000000000000000000000000000000000000000000000000000000000000001";
+  otherPeer = "0000000000000000000000000000000000000000000000000000000000000002";
   stub = pkgs.writeShellScriptBin "renews" "exit 0";
 
   evaluate =
@@ -31,6 +33,13 @@ let
               siteName = "swarm.test";
               secretKeyFile = "/run/keys/swarm-key";
               allowedPeers.member = peer;
+              allowedPeers.other = otherPeer;
+              adminPeers.member = peer;
+              adminPeers.other = otherPeer;
+              groupPrefixes = [
+                "bots."
+                "swarm."
+              ];
               bots.member.passwordFile = "/run/keys/member";
               groups = [ "bots.claims" ];
             };
@@ -70,7 +79,7 @@ assert
   ];
 assert builtins.elem "AF_NETLINK" swarm.RestrictAddressFamilies;
 assert lib.length (failedAssertions clashing) == 2;
-pkgs.runCommand "renews-iroh-module" { } ''
+pkgs.runCommand "renews-iroh-module" { nativeBuildInputs = [ pkgs.python3 ]; } ''
   top_config=${configOf top}
   swarm_config=${configOf swarm}
   swarm_init=${swarm.ExecStartPre}
@@ -82,7 +91,16 @@ pkgs.runCommand "renews-iroh-module" { } ''
   grep -Fx 'site_name = "swarm.test"' "$swarm_config"
   grep -Fx 'db_path = "sqlite:///var/lib/renews-swarm/news.db"' "$swarm_config"
   grep -Fx 'key_path = "/var/lib/renews-swarm/iroh.key"' "$swarm_config"
-  grep -Fx '"${peer}"' "$swarm_config"
+
+  python3 - "$top_config" "$swarm_config" <<'PY'
+  import sys, tomllib
+  top, swarm = (tomllib.load(open(path, "rb")) for path in sys.argv[1:])
+  assert top["iroh"]["allowed_peers"] == [], top["iroh"]
+  peers = ["${peer}", "${otherPeer}"]
+  assert swarm["iroh"]["allowed_peers"] == peers, swarm["iroh"]
+  assert swarm["iroh"]["admin_peers"] == peers, swarm["iroh"]
+  assert swarm["group_prefixes"] == ["bots.", "swarm."], swarm["group_prefixes"]
+  PY
 
   grep -F '"$CREDENTIALS_DIRECTORY/iroh-key" /var/lib/renews-swarm/iroh.key' "$swarm_init"
   grep -F '"$CREDENTIALS_DIRECTORY/bot-member"' "$swarm_init"
