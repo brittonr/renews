@@ -44,11 +44,15 @@ pub fn site_replaces_snapshot(snapshot_file: &Path, site_dir: &Path) -> bool {
     file.starts_with(&site)
 }
 
+/// Site name shown when no other is given: the slime network.
+pub const DEFAULT_SITE_TITLE: &str = "slime";
+
 /// Write a static HTML site for `snapshot` into `out`.
 ///
 /// Replaces `out` when it already exists. The same snapshot produces the
-/// same files. Text from the snapshot is escaped. Each group is a directory
-/// `g/<segment>/`, and each article is `g/<segment>/<number>.html`.
+/// same files. Text from the snapshot is escaped, and so is `title`, which
+/// heads the index and ends each group page's title. Each group is a
+/// directory `g/<segment>/`, and each article is `g/<segment>/<number>.html`.
 ///
 /// # Errors
 ///
@@ -56,7 +60,7 @@ pub fn site_replaces_snapshot(snapshot_file: &Path, site_dir: &Path) -> bool {
 /// two articles in one group share a number, two groups would use the same
 /// directory, a group name cannot be a path segment, or the directory
 /// cannot be written.
-pub fn render_site(snapshot: &Snapshot, out: &Path) -> anyhow::Result<RenderedSite> {
+pub fn render_site(snapshot: &Snapshot, out: &Path, title: &str) -> anyhow::Result<RenderedSite> {
     if snapshot.version != SNAPSHOT_VERSION {
         bail!("refusing to render snapshot version {}", snapshot.version);
     }
@@ -73,7 +77,7 @@ pub fn render_site(snapshot: &Snapshot, out: &Path) -> anyhow::Result<RenderedSi
 
     remove_path(&staging)?;
     fs::create_dir_all(&staging).with_context(|| format!("creating {}", staging.display()))?;
-    let written = match write_tree(snapshot, &staging) {
+    let written = match write_tree(snapshot, &staging, title) {
         Ok(written) => written,
         Err(err) => {
             let _ = remove_path(&staging);
@@ -107,7 +111,7 @@ struct Written {
     files: usize,
 }
 
-fn write_tree(snapshot: &Snapshot, root: &Path) -> anyhow::Result<Written> {
+fn write_tree(snapshot: &Snapshot, root: &Path, title: &str) -> anyhow::Result<Written> {
     let mut segments = Vec::with_capacity(snapshot.groups.len());
     let mut used: HashMap<String, &str> = HashMap::new();
     for group in &snapshot.groups {
@@ -131,8 +135,11 @@ fn write_tree(snapshot: &Snapshot, root: &Path) -> anyhow::Result<Written> {
         segments.push(segment);
     }
 
-    fs::write(root.join("index.html"), render_index(snapshot, &segments))
-        .with_context(|| format!("writing {}", root.join("index.html").display()))?;
+    fs::write(
+        root.join("index.html"),
+        render_index(snapshot, &segments, title),
+    )
+    .with_context(|| format!("writing {}", root.join("index.html").display()))?;
 
     let mut files = 1usize;
     let mut articles = 0usize;
@@ -141,7 +148,7 @@ fn write_tree(snapshot: &Snapshot, root: &Path) -> anyhow::Result<Written> {
         fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
         let by_id = message_index(group);
         let index_path = dir.join("index.html");
-        fs::write(&index_path, render_group(snapshot, group))
+        fs::write(&index_path, render_group(snapshot, group, title))
             .with_context(|| format!("writing {}", index_path.display()))?;
         files += 1;
         for article in articles_of(group) {
@@ -191,8 +198,11 @@ fn latest_date(group: &SnapshotGroup) -> &str {
         .unwrap_or("")
 }
 
-fn render_index(snapshot: &Snapshot, segments: &[String]) -> String {
-    let mut body = String::from("<h1>slime</h1>\n<p class=\"lead\">Read-only newsgroups.</p>\n");
+fn render_index(snapshot: &Snapshot, segments: &[String], title: &str) -> String {
+    let mut body = format!(
+        "<h1>{}</h1>\n<p class=\"lead\">Read-only newsgroups.</p>\n",
+        escape_html(title)
+    );
     if snapshot.groups.is_empty() {
         body.push_str("<p>No groups in this snapshot.</p>\n");
     } else {
@@ -221,10 +231,10 @@ fn render_index(snapshot: &Snapshot, segments: &[String]) -> String {
         }
         body.push_str("</tbody>\n</table>\n");
     }
-    page(snapshot, "slime", &body)
+    page(snapshot, title, &body)
 }
 
-fn render_group(snapshot: &Snapshot, group: &SnapshotGroup) -> String {
+fn render_group(snapshot: &Snapshot, group: &SnapshotGroup, title: &str) -> String {
     let mut body =
         String::from("<p class=\"crumb\"><a href=\"../../index.html\">groups</a></p>\n<h1>");
     body.push_str(&escape_html(&group.name));
@@ -271,7 +281,7 @@ fn render_group(snapshot: &Snapshot, group: &SnapshotGroup) -> String {
         }
         body.push_str("</section>\n");
     }
-    let title = format!("{} — slime", group.name);
+    let title = format!("{} — {title}", group.name);
     page(snapshot, &title, &body)
 }
 
@@ -666,12 +676,12 @@ mod tests {
         let snapshot = example();
         let dir = tempfile::tempdir().unwrap();
         let out = dir.path().join("site");
-        let first = render_site(&snapshot, &out).unwrap();
+        let first = render_site(&snapshot, &out, DEFAULT_SITE_TITLE).unwrap();
         assert_eq!(first.groups, 2);
         assert_eq!(first.articles, 5);
         assert_eq!(first.files, 1 + 2 + 5);
         let once = files_under(&out);
-        let twice = render_site(&snapshot, &out).unwrap();
+        let twice = render_site(&snapshot, &out, DEFAULT_SITE_TITLE).unwrap();
         assert_eq!(twice.files, first.files);
         assert_eq!(once, files_under(&out));
         assert!(once.iter().all(|(_, html)| html.contains(FOOTER)));
@@ -758,7 +768,7 @@ mod tests {
 
         let dir = tempfile::tempdir().unwrap();
         let out = dir.path().join("site");
-        render_site(&snapshot, &out).unwrap();
+        render_site(&snapshot, &out, DEFAULT_SITE_TITLE).unwrap();
         assert_pages_are_static(&out);
 
         let pages = files_under(&out);
@@ -816,13 +826,13 @@ mod tests {
         snapshot.groups[1].threads[0].articles[2].depth = 100;
         let dir = tempfile::tempdir().unwrap();
         let out = dir.path().join("site");
-        render_site(&snapshot, &out).unwrap();
+        render_site(&snapshot, &out, DEFAULT_SITE_TITLE).unwrap();
         let group = fs::read_to_string(out.join("g/bots.general/index.html")).unwrap();
         assert!(group.contains("style=\"margin-left: 32em\""));
         assert!(!group.contains("margin-left: 100em"));
 
         snapshot.groups[1].threads[1].articles[0].number = 1;
-        let err = render_site(&snapshot, &out).unwrap_err();
+        let err = render_site(&snapshot, &out, DEFAULT_SITE_TITLE).unwrap_err();
         assert!(err.to_string().contains("two articles numbered 1"));
     }
 
@@ -831,12 +841,12 @@ mod tests {
         let snapshot = example();
         let dir = tempfile::tempdir().unwrap();
         let out = dir.path().join("site");
-        render_site(&snapshot, &out).unwrap();
+        render_site(&snapshot, &out, DEFAULT_SITE_TITLE).unwrap();
         assert!(out.join("g/bots.general/5.html").is_file());
 
         let mut smaller = snapshot.clone();
         smaller.groups.pop();
-        render_site(&smaller, &out).unwrap();
+        render_site(&smaller, &out, DEFAULT_SITE_TITLE).unwrap();
         assert!(out.join("g/bots.announce/1.html").is_file());
         assert!(!out.join("g/bots.general").exists());
         assert!(!dir.path().join(".site.rendering").exists());
@@ -848,7 +858,7 @@ mod tests {
         let mut snapshot = example();
         snapshot.version = 2;
         let dir = tempfile::tempdir().unwrap();
-        let err = render_site(&snapshot, &dir.path().join("site")).unwrap_err();
+        let err = render_site(&snapshot, &dir.path().join("site"), DEFAULT_SITE_TITLE).unwrap_err();
         assert!(err.to_string().contains("version 2"));
 
         let snap = dir.path().join("snapshot.json");
@@ -867,12 +877,27 @@ mod tests {
         snapshot.groups.clear();
         let dir = tempfile::tempdir().unwrap();
         let out = dir.path().join("site");
-        let rendered = render_site(&snapshot, &out).unwrap();
+        let rendered = render_site(&snapshot, &out, DEFAULT_SITE_TITLE).unwrap();
         assert_eq!(rendered.files, 1);
         assert_eq!(rendered.articles, 0);
         let index = fs::read_to_string(out.join("index.html")).unwrap();
         assert!(index.contains("No groups in this snapshot."));
         assert!(index.contains(FOOTER));
+        assert_pages_are_static(&out);
+    }
+
+    #[test]
+    fn the_site_title_heads_the_index_and_group_pages_escaped() {
+        let snapshot = example();
+        let dir = tempfile::tempdir().unwrap();
+        let out = dir.path().join("site");
+        render_site(&snapshot, &out, "swarm <&>").unwrap();
+        let index = fs::read_to_string(out.join("index.html")).unwrap();
+        assert!(index.contains("<title>swarm &lt;&amp;&gt;</title>"));
+        assert!(index.contains("<h1>swarm &lt;&amp;&gt;</h1>"));
+        let group = fs::read_to_string(out.join("g/bots.general/index.html")).unwrap();
+        assert!(group.contains("<title>bots.general — swarm &lt;&amp;&gt;</title>"));
+        assert!(!index.contains("slime") && !group.contains("slime"));
         assert_pages_are_static(&out);
     }
 }

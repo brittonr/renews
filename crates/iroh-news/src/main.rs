@@ -93,6 +93,9 @@ enum Command {
         /// `iroh-news render`.
         #[arg(long, value_name = "DIR")]
         html: Option<PathBuf>,
+        /// Site name heading the `--html` pages.
+        #[arg(long, default_value = iroh_news::render::DEFAULT_SITE_TITLE)]
+        title: String,
     },
     /// Write a static HTML site from a snapshot file.
     ///
@@ -104,6 +107,9 @@ enum Command {
         /// Directory for the site. Replaced on each run.
         #[arg(long)]
         out: PathBuf,
+        /// Site name heading the pages.
+        #[arg(long, default_value = iroh_news::render::DEFAULT_SITE_TITLE)]
+        title: String,
     },
     /// Post an article. The body is read from stdin.
     Post {
@@ -439,6 +445,7 @@ async fn run() -> anyhow::Result<()> {
             full,
             ref groups,
             ref html,
+            ref title,
         } => {
             if let Some(html) = html {
                 let snapshot_file = out.join(iroh_news::snapshot::SNAPSHOT_FILE);
@@ -459,7 +466,7 @@ async fn run() -> anyhow::Result<()> {
             session.close().await?;
             let path = iroh_news::snapshot::write_snapshot(out, &fetched.snapshot)?;
             let html_path = if let Some(html) = html {
-                let rendered = iroh_news::render::render_site(&fetched.snapshot, html)?;
+                let rendered = iroh_news::render::render_site(&fetched.snapshot, html, title)?;
                 Some(rendered.directory)
             } else {
                 None
@@ -483,6 +490,7 @@ async fn run() -> anyhow::Result<()> {
         Command::Render {
             ref snapshot,
             ref out,
+            ref title,
         } => {
             let snapshot_path = if snapshot.is_dir() {
                 snapshot.join(iroh_news::snapshot::SNAPSHOT_FILE)
@@ -491,7 +499,7 @@ async fn run() -> anyhow::Result<()> {
             };
             refuse_html_over_snapshot(&snapshot_path, out)?;
             let loaded = iroh_news::snapshot::read_snapshot_file(&snapshot_path)?;
-            let rendered = iroh_news::render::render_site(&loaded, out)?;
+            let rendered = iroh_news::render::render_site(&loaded, out, title)?;
             let counts = loaded.counts();
             print_json(&serde_json::json!({
                 "version": loaded.version,

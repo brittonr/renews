@@ -13,7 +13,7 @@ iroh-news render \
   --out ~/.local/state/iroh-news/site
 ```
 
-`--snapshot` may be the JSON file or the directory that contains it. The same snapshot produces the same files. The clock at render time is not written anywhere. The footer is the snapshot's `generated_at` and `generator`.
+`--snapshot` may be the JSON file or the directory that contains it. The same snapshot produces the same files. The clock at render time is not written anywhere. The footer is the snapshot's `generated_at` and `generator`. `--title` names the site in the index heading and the page titles; it defaults to `slime`, so another network's site passes its own name (`--title swarm`).
 
 `snapshot --html` does both steps. The HTML directory must not be the snapshot directory, and it must not contain `snapshot.json`. Rendering replaces the site directory.
 
