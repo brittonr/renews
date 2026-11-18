@@ -43,6 +43,8 @@ pub struct IrohParts {
 /// How to bind the iroh endpoint.
 pub struct IrohBind {
     pub secret_key: SecretKey,
+    /// `Disabled` also turns off n0 address lookup and publishing, so the
+    /// endpoint is reachable only at the direct addresses in its ticket.
     pub relay_mode: RelayMode,
     /// Wait briefly for an n0 relay so the printed ticket includes one.
     /// Tests on a single machine set this to false and pass direct addresses.
@@ -146,7 +148,12 @@ fn write_secret_key(path: &Path, bytes: &[u8; 32]) -> anyhow::Result<()> {
 ///
 /// Returns an error if the endpoint cannot bind.
 pub async fn serve(parts: IrohParts, bind: IrohBind) -> anyhow::Result<IrohServer> {
-    let mut builder = Endpoint::builder(presets::N0)
+    let preset_builder = if matches!(bind.relay_mode, RelayMode::Disabled) {
+        Endpoint::builder(presets::Minimal)
+    } else {
+        Endpoint::builder(presets::N0)
+    };
+    let mut builder = preset_builder
         .secret_key(bind.secret_key)
         .relay_mode(bind.relay_mode);
     if let Some(addr) = bind.bind_addr {

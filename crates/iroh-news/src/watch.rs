@@ -10,7 +10,7 @@ use std::time::Duration;
 use anyhow::Context as _;
 use futures_util::StreamExt;
 use iroh::address_lookup::memory::MemoryLookup;
-use iroh::endpoint::{Connection, RelayMode, presets};
+use iroh::endpoint::Connection;
 use iroh::protocol::{AcceptError, ProtocolHandler, Router};
 use iroh::{Endpoint, EndpointId, Signature};
 use iroh_gossip::api::Message;
@@ -20,7 +20,7 @@ use serde::Serialize;
 use sha2::{Digest, Sha256};
 use tokio::sync::mpsc;
 
-use crate::{ALPN, BoxStream, ReadRequest, Session, Settings, discover};
+use crate::{ALPN, BoxStream, ReadRequest, Session, Settings};
 
 /// Header fields from a signed notification. The body is not included.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -55,20 +55,15 @@ impl WatchSession {
         if groups.is_empty() {
             anyhow::bail!("watch needs at least one group");
         }
-        let mut builder = Endpoint::builder(presets::N0).secret_key(settings.secret_key.clone());
-        if !settings.relays {
-            builder = builder
-                .relay_mode(RelayMode::Disabled)
-                .bind_addr((std::net::Ipv4Addr::LOCALHOST, 0))
-                .map_err(|err| anyhow::anyhow!("iroh client bind address: {err}"))?;
-        }
-        let endpoint = builder
-            .bind()
-            .await
-            .map_err(|err| anyhow::anyhow!("bind iroh endpoint: {err}"))?;
-        let addr = discover(&settings.server, &settings.state_dir, settings.discovery)
-            .await?
-            .addr;
+        let endpoint =
+            crate::bind_client_endpoint(settings.secret_key.clone(), settings.relays).await?;
+        let addr = crate::dial_addr(
+            &settings.server,
+            &settings.state_dir,
+            settings.discovery,
+            settings.relays,
+        )
+        .await?;
         let server_id = addr.id;
         let lookup = MemoryLookup::new();
         lookup.add_endpoint_info(addr.clone());

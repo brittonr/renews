@@ -62,6 +62,29 @@ let
         description = "Plain NNTP listen address. Keep this on localhost.";
       };
 
+      irohBindAddress = lib.mkOption {
+        type = lib.types.nullOr lib.types.str;
+        default = null;
+        example = "100.100.103.95:1119";
+        description = ''
+          UDP `address:port` for the iroh endpoint. Null binds every interface
+          on a random port. A fixed tailnet address keeps the ticket stable and
+          the endpoint off other networks; with `relays = false` that is the
+          only way to reach it. The address must exist when the unit starts.
+        '';
+      };
+
+      relays = lib.mkOption {
+        type = lib.types.bool;
+        default = true;
+        description = ''
+          Use the n0 relays and n0 address lookup. False publishes nothing and
+          serves only the direct addresses in the ticket, so allowlisted peers
+          must reach `irohBindAddress` themselves, for example over a tailnet,
+          and dial a ticket rather than a bare endpoint id.
+        '';
+      };
+
       siteName = lib.mkOption {
         type = lib.types.str;
         default = "bots.local";
@@ -296,7 +319,9 @@ let
       [iroh]
       enabled = true
       key_path = "${stateDir}/iroh.key"
-      localhost_tcp = true
+      localhost_tcp = true${
+        lib.optionalString (server.irohBindAddress != null) "\nbind_addr = \"${server.irohBindAddress}\""
+      }${lib.optionalString (!server.relays) "\nrelays = false\nwait_for_relay = false"}
       allowed_peers = [
       ${peerLines}
       ]
@@ -442,6 +467,12 @@ let
       {
         assertion = server.secretKeyFile == null || lib.hasPrefix "/" server.secretKeyFile;
         message = "${path}.secretKeyFile must be an absolute path, not a Nix store path";
+      }
+      {
+        assertion =
+          server.irohBindAddress == null
+          || builtins.match "(.*):[1-9][0-9]*" server.irohBindAddress != null;
+        message = "${path}.irohBindAddress must be address:port with a non-zero port, so the ticket stays stable";
       }
     ];
 

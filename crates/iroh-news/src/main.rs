@@ -30,11 +30,13 @@ struct Cli {
     /// State directory for the secret key and per-group cursors.
     #[arg(long, global = true)]
     state_dir: Option<PathBuf>,
-    /// Dial using only addresses in the ticket (no n0 relays).
+    /// Dial using only addresses in the ticket: no n0 relays or address
+    /// lookup. Same as `relays = false` in the config.
     #[arg(long, global = true)]
     no_relays: bool,
-    /// Server ticket, endpoint id, or DNS name such as slime.onix.computer.
-    /// Overrides the config file and `IROH_NEWS_SERVER`.
+    /// Server ticket, endpoint id, DNS name such as slime.onix.computer, or
+    /// `<endpoint id>@<host>:<port>` (the id is pinned; the host's A/AAAA
+    /// records give the addresses). Overrides the config and `IROH_NEWS_SERVER`.
     #[arg(long, global = true)]
     server: Option<String>,
     /// How to resolve a DNS name: `auto` (system, then DNS-over-HTTPS, then
@@ -296,7 +298,8 @@ enum AdminOp {
 
 #[derive(Debug, Deserialize)]
 struct FileConfig {
-    /// Endpoint ticket or endpoint id. Overridden by `IROH_NEWS_SERVER`.
+    /// Endpoint ticket, endpoint id, DNS name, or `<endpoint id>@<host>:<port>`.
+    /// Overridden by `IROH_NEWS_SERVER`.
     #[serde(default)]
     server: Option<String>,
     /// NNTP username. Overridden by `IROH_NEWS_USERNAME`.
@@ -329,6 +332,11 @@ struct FileConfig {
     /// each server identity its own.
     #[serde(default)]
     secretspec_project: Option<String>,
+    /// `false` dials only the direct addresses in the server's ticket, with no
+    /// n0 relays or address lookup: for a server reachable over a tailnet.
+    /// `--no-relays` does the same.
+    #[serde(default)]
+    relays: Option<bool>,
 }
 
 fn credential_store(file: Option<&FileConfig>) -> anyhow::Result<CredentialStore> {
@@ -336,6 +344,10 @@ fn credential_store(file: Option<&FileConfig>) -> anyhow::Result<CredentialStore
         file.and_then(|cfg| cfg.secretspec.as_ref()),
         file.and_then(|cfg| cfg.secretspec_project.as_deref()),
     )
+}
+
+fn use_relays(cli: &Cli, file: Option<&FileConfig>) -> bool {
+    !cli.no_relays && file.and_then(|cfg| cfg.relays).unwrap_or(true)
 }
 
 #[tokio::main]
@@ -542,7 +554,7 @@ async fn run() -> anyhow::Result<()> {
                     &server,
                     &state_dir,
                     key.clone(),
-                    !cli.no_relays,
+                    use_relays(&cli, file.as_ref()),
                     &name,
                     &owner_text,
                     &note,
@@ -602,7 +614,7 @@ async fn run() -> anyhow::Result<()> {
                     &server,
                     &state_dir,
                     key.clone(),
-                    !cli.no_relays,
+                    use_relays(&cli, file.as_ref()),
                     &username,
                     owner,
                     "",
@@ -653,7 +665,7 @@ async fn run() -> anyhow::Result<()> {
                 server,
                 state_dir: state_dir.clone(),
                 secret_key,
-                relays: !cli.no_relays,
+                relays: use_relays(&cli, file.as_ref()),
                 username,
                 password,
                 from,
@@ -673,7 +685,7 @@ async fn run() -> anyhow::Result<()> {
                 .or_else(|| std::env::var("IROH_NEWS_SERVER").ok())
                 .or_else(|| file.as_ref().and_then(|cfg| cfg.server.clone()))
                 .context("set --server, IROH_NEWS_SERVER, or server in the config")?;
-            let relays = !cli.no_relays;
+            let relays = use_relays(&cli, file.as_ref());
             let discovery = discovery_mode(&cli, file.as_ref())?;
             let store = credential_store(file.as_ref())?;
             let secrets_dir = file.as_ref().and_then(|cfg| cfg.secrets_dir.clone());
@@ -790,6 +802,7 @@ fn load_settings(cli: &Cli, state_dir: &Path) -> anyhow::Result<Settings> {
     let file: FileConfig =
         toml::from_str(&text).with_context(|| format!("parsing config {}", path.display()))?;
     let discovery = discovery_mode(cli, Some(&file))?;
+    let relays = use_relays(cli, Some(&file));
     let store = credential_store(Some(&file))?;
     let username = std::env::var("IROH_NEWS_USERNAME")
         .ok()
@@ -822,7 +835,7 @@ fn load_settings(cli: &Cli, state_dir: &Path) -> anyhow::Result<Settings> {
         password,
         from,
         secret_key: store.secret_key(state_dir)?.0,
-        relays: !cli.no_relays,
+        relays,
         state_dir: state_dir.to_path_buf(),
         discovery,
     })

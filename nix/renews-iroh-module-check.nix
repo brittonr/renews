@@ -32,6 +32,8 @@ let
               listenAddress = "127.0.0.1:1119";
               siteName = "swarm.test";
               secretKeyFile = "/run/keys/swarm-key";
+              irohBindAddress = "100.64.0.1:1119";
+              relays = false;
               allowedPeers.member = peer;
               allowedPeers.other = otherPeer;
               adminPeers.member = peer;
@@ -60,6 +62,9 @@ let
       stateDirectory = "renews";
     };
   };
+  zeroPort = evaluate {
+    services.renews-iroh.instances.swarm.irohBindAddress = lib.mkForce "100.64.0.1:0";
+  };
 
   units = valid.systemd.services;
   top = units.renews-iroh.serviceConfig;
@@ -79,6 +84,7 @@ assert
   ];
 assert builtins.elem "AF_NETLINK" swarm.RestrictAddressFamilies;
 assert lib.length (failedAssertions clashing) == 2;
+assert lib.length (failedAssertions zeroPort) == 1;
 pkgs.runCommand "renews-iroh-module" { nativeBuildInputs = [ pkgs.python3 ]; } ''
   top_config=${configOf top}
   swarm_config=${configOf swarm}
@@ -96,9 +102,14 @@ pkgs.runCommand "renews-iroh-module" { nativeBuildInputs = [ pkgs.python3 ]; } '
   import sys, tomllib
   top, swarm = (tomllib.load(open(path, "rb")) for path in sys.argv[1:])
   assert top["iroh"]["allowed_peers"] == [], top["iroh"]
+  # Defaults render nothing, so a server that sets neither keeps its bytes.
+  assert {"bind_addr", "relays", "wait_for_relay"}.isdisjoint(top["iroh"]), top["iroh"]
   peers = ["${peer}", "${otherPeer}"]
   assert swarm["iroh"]["allowed_peers"] == peers, swarm["iroh"]
   assert swarm["iroh"]["admin_peers"] == peers, swarm["iroh"]
+  assert swarm["iroh"]["bind_addr"] == "100.64.0.1:1119", swarm["iroh"]
+  assert swarm["iroh"]["relays"] is False, swarm["iroh"]
+  assert swarm["iroh"]["wait_for_relay"] is False, swarm["iroh"]
   assert swarm["group_prefixes"] == ["bots.", "swarm."], swarm["group_prefixes"]
   PY
 

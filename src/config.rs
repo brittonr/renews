@@ -115,7 +115,14 @@ pub struct IrohConfig {
     #[serde(default)]
     pub bind_addr: Option<String>,
 
-    /// Wait up to 15s for an n0 relay before printing the ticket.
+    /// Use the n0 relays and n0 address lookup. `false` publishes nothing and
+    /// serves only the direct addresses in the ticket, so peers must reach
+    /// `bind_addr` themselves, for example over a tailnet.
+    #[serde(default = "default_true")]
+    pub relays: bool,
+
+    /// Wait up to 15s for an n0 relay before printing the ticket. Ignored
+    /// when `relays` is false.
     #[serde(default = "default_true")]
     pub wait_for_relay: bool,
 
@@ -201,6 +208,7 @@ impl Default for IrohConfig {
             admin_peers: Vec::new(),
             localhost_tcp: true,
             bind_addr: None,
+            relays: true,
             wait_for_relay: true,
             join_requests: JoinRequestsConfig::default(),
             gossip: GossipConfig::default(),

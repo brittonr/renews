@@ -4,6 +4,9 @@
 //! The client looks up TXT `_iroh-news.<name>` and expects either
 //! `ticket=<EndpointTicket>` or `id=<EndpointId>`. A raw endpoint ticket
 //! or a bare endpoint id is used as-is and does not touch DNS.
+//! `<EndpointId>@<host>:<port>` pins the endpoint id and takes only the
+//! direct addresses from `host` (A/AAAA through the system resolver), so a
+//! DNS answer cannot substitute another server.
 //!
 //! [`DiscoveryMode::Auto`] tries the system resolver, then DNS-over-HTTPS
 //! JSON at Cloudflare and Google, then the last good answer cached under
@@ -17,7 +20,7 @@ use std::str::FromStr;
 use std::time::Duration;
 
 use anyhow::{Context, bail};
-use iroh::{EndpointAddr, EndpointId};
+use iroh::{EndpointAddr, EndpointId, TransportAddr};
 use iroh_tickets::endpoint::EndpointTicket;
 
 /// Label placed in front of the public DNS name.
@@ -68,6 +71,9 @@ impl DiscoveryMode {
 pub enum DiscoverySource {
     /// `server` was already a ticket or endpoint id.
     Direct,
+    /// `server` was `<endpoint id>@<host>:<port>`; the system resolver
+    /// supplied the host's addresses.
+    Host,
     /// The system resolver returned a usable TXT record.
     System,
     /// `https://cloudflare-dns.com/dns-query`.
@@ -84,6 +90,7 @@ impl DiscoverySource {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Direct => "direct",
+            Self::Host => "host",
             Self::System => "system",
             Self::DohCloudflare => "doh-cloudflare",
             Self::DohGoogle => "doh-google",
@@ -306,6 +313,12 @@ async fn discover_with(
         return Ok(ResolvedEndpoint {
             addr,
             source: DiscoverySource::Direct,
+        });
+    }
+    if let Some((id, host)) = split_pinned_host(server)? {
+        return Ok(ResolvedEndpoint {
+            addr: resolve_pinned_host(id, host).await?,
+            source: DiscoverySource::Host,
         });
     }
     let qname = discovery_qname(server);
@@ -562,6 +575,38 @@ fn is_endpoint_id(value: &str) -> bool {
     value.len() == 64 && value.bytes().all(|b| b.is_ascii_hexdigit())
 }
 
+/// Split `<endpoint id>@<host>:<port>`. `None` for anything without `@`.
+fn split_pinned_host(server: &str) -> anyhow::Result<Option<(EndpointId, &str)>> {
+    let Some((id, host)) = server.split_once('@') else {
+        return Ok(None);
+    };
+    let usage = || format!("{server:?} must be <64 hex endpoint id>@<host>:<port>");
+    if !is_endpoint_id(id)
+        || host
+            .rsplit_once(':')
+            .is_none_or(|(name, port)| name.is_empty() || port.parse::<u16>().is_err())
+    {
+        bail!(usage());
+    }
+    let id = id
+        .parse()
+        .map_err(|err| anyhow::anyhow!("{}: {err}", usage()))?;
+    Ok(Some((id, host)))
+}
+
+/// The pinned id with every address the system resolver gives for `host`.
+async fn resolve_pinned_host(id: EndpointId, host: &str) -> anyhow::Result<EndpointAddr> {
+    let addrs: Vec<_> = tokio::net::lookup_host(host)
+        .await
+        .with_context(|| format!("resolving {host}"))?
+        .map(TransportAddr::Ip)
+        .collect();
+    if addrs.is_empty() {
+        bail!("{host} resolved to no addresses");
+    }
+    Ok(EndpointAddr::from_parts(id, addrs))
+}
+
 fn cache_path(state_dir: &Path, name: &str) -> anyhow::Result<PathBuf> {
     if name.is_empty()
         || !name
@@ -599,7 +644,6 @@ fn read_discovery_cache(state_dir: &Path, name: &str) -> anyhow::Result<Option<D
 mod tests {
     use super::*;
     use iroh::SecretKey;
-    use iroh::TransportAddr;
     use iroh_tickets::Ticket;
     use std::net::SocketAddr;
     use std::sync::Mutex;
@@ -978,5 +1022,45 @@ mod tests {
         );
         assert_eq!(DiscoveryMode::parse("doh").unwrap(), DiscoveryMode::Doh);
         assert!(DiscoveryMode::parse("doh-google").is_err());
+    }
+
+    #[tokio::test]
+    async fn pinned_host_keeps_the_id_and_skips_txt_lookups() {
+        let id = SecretKey::generate().public();
+        let system = MapLookup {
+            records: vec![],
+            calls: Mutex::new(0),
+            fail: true,
+        };
+        let doh = fake_doh(Err("unused".into()), Err("unused".into()));
+        let dir = tempfile::tempdir().unwrap();
+        let server = format!("{id}@127.0.0.1:1119");
+        let resolved = discover_with(&server, dir.path(), DiscoveryMode::Auto, &system, &doh)
+            .await
+            .unwrap();
+        assert_eq!(resolved.source, DiscoverySource::Host);
+        assert_eq!(resolved.addr.id, id);
+        let addrs: Vec<SocketAddr> = resolved.addr.ip_addrs().copied().collect();
+        assert_eq!(addrs, ["127.0.0.1:1119".parse::<SocketAddr>().unwrap()]);
+        assert_eq!(*system.calls.lock().unwrap(), 0);
+        assert!(doh.calls.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn pinned_host_needs_an_id_a_host_and_a_port() {
+        let id = SecretKey::generate().public();
+        assert!(split_pinned_host("slime.onix.computer").unwrap().is_none());
+        for bad in [
+            format!("{id}@swarm.example"),
+            format!("{id}@:1119"),
+            format!("{id}@swarm.example:port"),
+            "abc@swarm.example:1119".to_string(),
+        ] {
+            assert!(split_pinned_host(&bad).is_err(), "{bad}");
+        }
+        let server = format!("{id}@swarm.example:1119");
+        let (parsed, host) = split_pinned_host(&server).unwrap().unwrap();
+        assert_eq!(parsed, id);
+        assert_eq!(host, "swarm.example:1119");
     }
 }

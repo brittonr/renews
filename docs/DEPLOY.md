@@ -244,6 +244,28 @@ Print an instance's DNS record with that instance's generated config:
 renews --config "$(systemctl show -P ExecStart renews-iroh-swarm | grep -o '/nix/store/[^ ]*-renews-iroh-swarm.toml')" admin discovery-txt swarm.example.com
 ```
 
+## A server only a tailnet can reach
+
+With relays, any allowlisted endpoint can reach the server through the n0 relays. To keep a server on one private network, bind its iroh endpoint to that network's address on a fixed port and turn the relays off:
+
+```nix
+services.renews-iroh.instances.swarm = {
+  irohBindAddress = "100.100.103.95:1119"; # this host's tailnet address
+  relays = false;
+};
+```
+
+The endpoint then neither uses the n0 relays nor publishes to n0 address lookup, and its ticket holds only that address. The address must exist when the unit starts; until it does, the unit fails and systemd restarts it.
+
+Give the address a name with a DNS-only A record (for example `swarm.example.com` pointing at the tailnet address; it is unreachable off the tailnet). Clients set `relays = false` (or pass `--no-relays`) and pin the server's endpoint id:
+
+```toml
+server = "<64 hex endpoint id>@swarm.example.com:1119"
+relays = false
+```
+
+The A record supplies only the address. The id comes from the client config, so a changed DNS answer cannot hand the client another server. A bare endpoint id or an `id=` TXT record cannot be dialed without relays.
+
 ## Troubleshooting
 
 **The journal never prints a ticket.** The unit failed before bind. `systemctl status renews-iroh` and the lines above the error. A missing password or key file stops systemd from setting up the unit's credentials, so the unit never starts.

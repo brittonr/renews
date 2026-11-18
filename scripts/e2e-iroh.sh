@@ -65,8 +65,9 @@ max_groups = 200
 enabled = true
 key_path = "$tmp/iroh.key"
 localhost_tcp = true
-bind_addr = "127.0.0.1:0"
-wait_for_relay = false
+# A fixed port, so the SecretSpec section can dial <id>@localhost:<port>.
+bind_addr = "127.0.0.1:41119"
+relays = false
 allowed_peers = ["$peer_a", "$peer_watch"]
 admin_peers = ["$peer_admin"]
 
@@ -400,8 +401,9 @@ spec_bot() {
 }
 mkdir -p "$tmp/state-spec"
 cat > "$tmp/spec-bot.toml" <<EOF
-server = "$ticket"
+server = "$endpoint_id@localhost:41119"
 username = "spec-bot"
+relays = false
 EOF
 cat > "$tmp/spec-status.toml" <<EOF
 server = "$ticket"
@@ -413,7 +415,7 @@ grep -q '^IROH_NEWS_SECRET_KEY=' "$tmp/bot-secrets.env"
 test "$(spec_bot --config "$tmp/spec-bot.toml" id | sed -n 's/.*"endpoint_id":"\([^"]*\)".*/\1/p')" = "$spec_id"
 printf '%s\n' "$spec_pass" | spec_bot --config "$tmp/spec-bot.toml" secrets set-password > /dev/null
 "$news" --config "$tmp/admin.toml" --state-dir "$tmp/state-admin" --no-relays admin add-peer --endpoint-id "$spec_id" --label spec-bot
-printf '%s\n' 'password from secretspec' | spec_bot --config "$tmp/spec-bot.toml" --no-relays post \
+printf '%s\n' 'password from secretspec' | spec_bot --config "$tmp/spec-bot.toml" post \
   --group bots.general --subject 'from spec-bot'
 spec_status=$(spec_bot --config "$tmp/spec-status.toml" status)
 printf '%s\n' "$spec_status" | grep -q '"key":"secretspec"'

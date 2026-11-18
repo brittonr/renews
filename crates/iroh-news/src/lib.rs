@@ -39,6 +39,43 @@ pub use watch::{Notification, WatchSession, run_watch, wait_for_new};
 /// ALPN shared with the renews iroh listener.
 pub const ALPN: &[u8] = b"/onix/nntp/1";
 
+/// Bind a client endpoint. With relays it uses the n0 relays and address
+/// lookup. Without, it uses neither and publishes nothing, so it can only dial
+/// the direct addresses in a server ticket, such as a tailnet address.
+pub(crate) async fn bind_client_endpoint(
+    secret_key: SecretKey,
+    relays: bool,
+) -> anyhow::Result<Endpoint> {
+    let builder = if relays {
+        Endpoint::builder(presets::N0)
+    } else {
+        Endpoint::builder(presets::Minimal).relay_mode(RelayMode::Disabled)
+    };
+    builder
+        .secret_key(secret_key)
+        .bind()
+        .await
+        .map_err(|err| anyhow::anyhow!("bind iroh endpoint: {err}"))
+}
+
+/// Resolve `server` to the address to dial. Without relays nothing can look up
+/// a bare endpoint id, so the server must come with direct addresses.
+pub(crate) async fn dial_addr(
+    server: &str,
+    state_dir: &Path,
+    discovery: DiscoveryMode,
+    relays: bool,
+) -> anyhow::Result<iroh::EndpointAddr> {
+    let addr = discover::discover(server, state_dir, discovery).await?.addr;
+    if !relays && addr.ip_addrs().next().is_none() {
+        bail!(
+            "{server} gives no direct address to dial without relays; use an endpoint \
+             ticket, or publish ticket= instead of id= in its _iroh-news TXT record"
+        );
+    }
+    Ok(addr)
+}
+
 /// What a bot needs in order to dial and authenticate.
 #[derive(Clone)]
 pub struct Settings {
@@ -49,7 +86,8 @@ pub struct Settings {
     /// `From` header used by [`post_article`].
     pub from: String,
     pub secret_key: SecretKey,
-    /// Use the n0 relays. Tests on one machine turn this off.
+    /// Use the n0 relays and address lookup. Off, only the direct addresses
+    /// in the server's ticket are dialed (a tailnet, or one machine in tests).
     pub relays: bool,
     pub state_dir: PathBuf,
     /// How a DNS server name is resolved. Tickets and endpoint ids skip DNS.
@@ -94,23 +132,14 @@ impl Session {
     /// Returns an error if the peer cannot be reached, the allowlist rejects
     /// us, or `AUTHINFO` fails.
     pub async fn connect(settings: Settings) -> anyhow::Result<Self> {
-        let mut builder = Endpoint::builder(presets::N0).secret_key(settings.secret_key);
-        if !settings.relays {
-            // Direct loopback only. A default bind advertises docker/LAN addresses
-            // that are not reachable without a relay.
-            builder = builder
-                .relay_mode(RelayMode::Disabled)
-                .bind_addr((std::net::Ipv4Addr::LOCALHOST, 0))
-                .map_err(|err| anyhow::anyhow!("iroh client bind address: {err}"))?;
-        }
-        let endpoint = builder
-            .bind()
-            .await
-            .map_err(|err| anyhow::anyhow!("bind iroh endpoint: {err}"))?;
-
-        let addr = discover::discover(&settings.server, &settings.state_dir, settings.discovery)
-            .await?
-            .addr;
+        let endpoint = bind_client_endpoint(settings.secret_key, settings.relays).await?;
+        let addr = dial_addr(
+            &settings.server,
+            &settings.state_dir,
+            settings.discovery,
+            settings.relays,
+        )
+        .await?;
         let connection = endpoint
             .connect(addr, ALPN)
             .await

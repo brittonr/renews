@@ -9,11 +9,10 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context as _, bail};
 use iroh::SecretKey;
-use iroh::endpoint::{RelayMode, presets};
 use serde_json::{Value, json};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
-use crate::discover::{self, DiscoveryMode};
+use crate::discover::DiscoveryMode;
 
 /// ALPN for the admin channel. Must match `renews::admin::ADMIN_ALPN`.
 pub const ADMIN_ALPN: &[u8] = b"/onix/nntp-admin/1";
@@ -76,18 +75,8 @@ async fn framed_call(
     body: &Value,
     discovery: DiscoveryMode,
 ) -> anyhow::Result<Value> {
-    let mut builder = iroh::Endpoint::builder(presets::N0).secret_key(secret_key);
-    if !relays {
-        builder = builder
-            .relay_mode(RelayMode::Disabled)
-            .bind_addr((std::net::Ipv4Addr::LOCALHOST, 0))
-            .map_err(|err| anyhow::anyhow!("iroh client bind address: {err}"))?;
-    }
-    let endpoint = builder
-        .bind()
-        .await
-        .map_err(|err| anyhow::anyhow!("bind iroh endpoint: {err}"))?;
-    let addr = discover::discover(server, state_dir, discovery).await?.addr;
+    let endpoint = crate::bind_client_endpoint(secret_key, relays).await?;
+    let addr = crate::dial_addr(server, state_dir, discovery, relays).await?;
     let connection = endpoint
         .connect(addr, alpn)
         .await
@@ -121,18 +110,8 @@ pub async fn admin_call(
     args: Value,
     discovery: DiscoveryMode,
 ) -> anyhow::Result<Value> {
-    let mut builder = iroh::Endpoint::builder(presets::N0).secret_key(secret_key);
-    if !relays {
-        builder = builder
-            .relay_mode(RelayMode::Disabled)
-            .bind_addr((std::net::Ipv4Addr::LOCALHOST, 0))
-            .map_err(|err| anyhow::anyhow!("iroh client bind address: {err}"))?;
-    }
-    let endpoint = builder
-        .bind()
-        .await
-        .map_err(|err| anyhow::anyhow!("bind iroh endpoint: {err}"))?;
-    let addr = discover::discover(server, state_dir, discovery).await?.addr;
+    let endpoint = crate::bind_client_endpoint(secret_key, relays).await?;
+    let addr = crate::dial_addr(server, state_dir, discovery, relays).await?;
     let connection = endpoint
         .connect(addr, ADMIN_ALPN)
         .await

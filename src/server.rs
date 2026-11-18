@@ -460,13 +460,14 @@ impl Server {
     /// Start the iroh listener when `[iroh] enabled` is set.
     #[cfg(feature = "iroh")]
     async fn start_iroh_listener(&self) -> ServerResult<Option<crate::iroh::IrohServer>> {
-        let (enabled, key_path, allowed_peers, bind_addr, wait_for_relay) = {
+        let (enabled, key_path, allowed_peers, bind_addr, relays, wait_for_relay) = {
             let cfg = self.components.config.read().await;
             (
                 cfg.iroh.enabled,
                 cfg.iroh.key_path.clone(),
                 cfg.iroh.allowed_peers.clone(),
                 cfg.iroh.bind_addr.clone(),
+                cfg.iroh.relays,
                 cfg.iroh.wait_for_relay,
             )
         };
@@ -495,8 +496,12 @@ impl Server {
             parts,
             crate::iroh::IrohBind {
                 secret_key,
-                relay_mode: iroh::endpoint::RelayMode::Default,
-                wait_for_relay,
+                relay_mode: if relays {
+                    iroh::endpoint::RelayMode::Default
+                } else {
+                    iroh::endpoint::RelayMode::Disabled
+                },
+                wait_for_relay: wait_for_relay && relays,
                 bind_addr: bind_addr
                     .as_deref()
                     .map(str::parse)
