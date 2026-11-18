@@ -198,12 +198,12 @@ impl UsageTracker {
                 // Remove the entry to avoid memory growth
                 // (the entry might have been incremented again by another thread,
                 // so we need to check the value and only remove if still 0)
-                if let Some((_, counter)) = self.connections.remove(username) {
-                    if counter.load(Ordering::SeqCst) > 0 {
-                        // Race: someone connected between our check and remove
-                        // Put it back
-                        self.connections.insert(username.to_string(), counter);
-                    }
+                if let Some((_, counter)) = self.connections.remove(username)
+                    && counter.load(Ordering::SeqCst) > 0
+                {
+                    // Race: someone connected between our check and remove
+                    // Put it back
+                    self.connections.insert(username.to_string(), counter);
                 }
             }
         }

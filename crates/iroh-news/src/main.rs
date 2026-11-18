@@ -6,11 +6,12 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, bail};
 use clap::{Parser, Subcommand};
+use iroh_news::credentials::{KEY_SECRET, PASSWORD_SECRET};
 use iroh_news::mcp::{McpConfig, serve};
 use iroh_news::{
-    DiscoveryMode, Identity, JoinRequest, PostRequest, ReadRequest, Session, Settings, admin_call,
-    discover, discovery_qname, join_request, load_or_create_secret_key, prepare_join, run_watch,
-    stash_password,
+    CredentialStore, DiscoveryMode, Identity, JoinRequest, KeySource, PostRequest, ReadRequest,
+    SecretSpecSetting, Session, Settings, admin_call, discover, discovery_qname, join_request,
+    prepare_join, run_watch,
 };
 use serde::Deserialize;
 use serde::Serialize;
@@ -165,6 +166,26 @@ enum Command {
         #[command(subcommand)]
         op: AdminOp,
     },
+    /// Store credentials in SecretSpec or read one back.
+    Secrets {
+        #[command(subcommand)]
+        op: SecretsOp,
+    },
+}
+
+#[derive(Subcommand)]
+enum SecretsOp {
+    /// Store the NNTP password as IROH_NEWS_PASSWORD. Prompts on a terminal;
+    /// otherwise reads stdin.
+    SetPassword,
+    /// Move the state directory's `secret_key` file into SecretSpec as
+    /// IROH_NEWS_SECRET_KEY, then delete the file. The endpoint id is kept.
+    ImportKey,
+    /// Print an account password that an admin command stored in SecretSpec.
+    AccountPassword {
+        #[arg(long)]
+        username: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -290,13 +311,31 @@ struct FileConfig {
     /// Expose admin MCP tools. The endpoint id must be in aspen1 `adminPeers`.
     #[serde(default)]
     admin: bool,
-    /// Directory for generated passwords. Defaults to `$state_dir/secrets`.
+    /// Directory for generated passwords. Setting it keeps them in files even
+    /// when SecretSpec is available. Defaults to `$state_dir/secrets`.
     #[serde(default)]
     secrets_dir: Option<PathBuf>,
     /// `auto`, `system`, or `doh`. Overridden by `--discovery` and
     /// `IROH_NEWS_DISCOVERY`.
     #[serde(default)]
     discovery: Option<String>,
+    /// `false` keeps the key and passwords in files. `true` or a provider
+    /// name or URI (such as `"keyring://"`) requires SecretSpec. Unset uses
+    /// SecretSpec when `SECRETSPEC_PROVIDER` or a global default provider is
+    /// configured, and files otherwise.
+    #[serde(default)]
+    secretspec: Option<SecretSpecSetting>,
+    /// SecretSpec project for this identity. Defaults to `iroh-news`; give
+    /// each server identity its own.
+    #[serde(default)]
+    secretspec_project: Option<String>,
+}
+
+fn credential_store(file: Option<&FileConfig>) -> anyhow::Result<CredentialStore> {
+    CredentialStore::new(
+        file.and_then(|cfg| cfg.secretspec.as_ref()),
+        file.and_then(|cfg| cfg.secretspec_project.as_deref()),
+    )
 }
 
 #[tokio::main]
@@ -320,7 +359,8 @@ async fn run() -> anyhow::Result<()> {
 
     match cli.command {
         Command::Id => {
-            let key = load_or_create_secret_key(&state_dir)?;
+            let file = read_file_config(&cli)?;
+            let (key, _) = credential_store(file.as_ref())?.secret_key(&state_dir)?;
             print_json(&Identity {
                 endpoint_id: key.public().to_string(),
             })?;
@@ -486,11 +526,12 @@ async fn run() -> anyhow::Result<()> {
                 .or_else(|| file.as_ref().and_then(|cfg| cfg.server.clone()))
                 .unwrap_or_else(|| iroh_news::DEFAULT_JOIN_SERVER.to_string());
             let config_path = cli.config.clone().unwrap_or(default_config_path()?);
+            let (key, _) = credential_store(file.as_ref())?.secret_key(&state_dir)?;
             let report = prepare_join(JoinRequest {
                 name: &name,
                 owner: owner.as_deref(),
                 server: &server,
-                state_dir: &state_dir,
+                secret_key: &key,
                 config_path: &config_path,
             })?;
             let owner_text = owner.clone().unwrap_or_else(|| "operator".into());
@@ -500,7 +541,7 @@ async fn run() -> anyhow::Result<()> {
                 let response = join_request(
                     &server,
                     &state_dir,
-                    load_or_create_secret_key(&state_dir)?,
+                    key.clone(),
                     !cli.no_relays,
                     &name,
                     &owner_text,
@@ -543,8 +584,9 @@ async fn run() -> anyhow::Result<()> {
             Ok(())
         }
         Command::Status => {
-            let key = load_or_create_secret_key(&state_dir)?;
             let file = read_file_config(&cli)?;
+            let store = credential_store(file.as_ref())?;
+            let (key, key_source) = store.secret_key(&state_dir)?;
             let server = cli
                 .server
                 .clone()
@@ -552,7 +594,7 @@ async fn run() -> anyhow::Result<()> {
                 .or_else(|| file.as_ref().and_then(|cfg| cfg.server.clone()));
             let username = file.as_ref().and_then(|cfg| cfg.username.clone());
             let password_configured =
-                optional_password(file.as_ref())?.is_some_and(|p| !p.is_empty());
+                optional_password(file.as_ref(), &store)?.is_some_and(|p| !p.is_empty());
             let mut join_status = serde_json::Value::Null;
             if let (Some(server), Some(username)) = (server.clone(), username.clone()) {
                 let owner = "operator";
@@ -576,6 +618,7 @@ async fn run() -> anyhow::Result<()> {
                 "server": server,
                 "username": username,
                 "password_configured": password_configured,
+                "credentials": credentials_json(&store, &key_source),
                 "join": join_status,
             }))?;
             Ok(())
@@ -592,7 +635,8 @@ async fn run() -> anyhow::Result<()> {
             let username = std::env::var("IROH_NEWS_USERNAME")
                 .ok()
                 .or_else(|| file.as_ref().and_then(|cfg| cfg.username.clone()));
-            let password = optional_password(file.as_ref())?;
+            let store = credential_store(file.as_ref())?;
+            let password = optional_password(file.as_ref(), &store)?;
             let from = std::env::var("IROH_NEWS_FROM")
                 .ok()
                 .or_else(|| file.as_ref().and_then(|cfg| cfg.from.clone()))
@@ -602,20 +646,20 @@ async fn run() -> anyhow::Result<()> {
                         .map(|name| format!("{name}@bots.local"))
                         .unwrap_or_else(|| "bot@bots.local".into())
                 });
-            let secrets_dir = file
-                .as_ref()
-                .and_then(|cfg| cfg.secrets_dir.clone())
-                .unwrap_or_else(|| state_dir.join("secrets"));
+            let secrets_dir = file.as_ref().and_then(|cfg| cfg.secrets_dir.clone());
             let discovery = discovery_mode(&cli, file.as_ref())?;
+            let (secret_key, _) = store.secret_key(&state_dir)?;
             serve(McpConfig {
                 server,
                 state_dir: state_dir.clone(),
-                secret_key: load_or_create_secret_key(&state_dir)?,
+                secret_key,
                 relays: !cli.no_relays,
                 username,
                 password,
                 from,
+                default_secrets_dir: state_dir.join("secrets"),
                 secrets_dir,
+                store,
                 admin,
                 discovery,
             })
@@ -631,22 +675,50 @@ async fn run() -> anyhow::Result<()> {
                 .context("set --server, IROH_NEWS_SERVER, or server in the config")?;
             let relays = !cli.no_relays;
             let discovery = discovery_mode(&cli, file.as_ref())?;
-            let secrets_dir = file
-                .and_then(|cfg| cfg.secrets_dir)
-                .unwrap_or_else(|| state_dir.join("secrets"));
+            let store = credential_store(file.as_ref())?;
+            let secrets_dir = file.as_ref().and_then(|cfg| cfg.secrets_dir.clone());
             let (op_name, args) = admin_args(op).await?;
+            let (secret_key, _) = store.secret_key(&state_dir)?;
             let mut result = admin_call(
-                &server,
-                &state_dir,
-                load_or_create_secret_key(&state_dir)?,
-                relays,
-                &op_name,
-                args,
-                discovery,
+                &server, &state_dir, secret_key, relays, &op_name, args, discovery,
             )
             .await?;
-            stash_password(&mut result, &secrets_dir)?;
+            store.stash_account_password(
+                &mut result,
+                secrets_dir.as_deref(),
+                &state_dir.join("secrets"),
+            )?;
             print_json(&result)?;
+            Ok(())
+        }
+        Command::Secrets { ref op } => {
+            let file = read_file_config(&cli)?;
+            let store = credential_store(file.as_ref())?;
+            match op {
+                SecretsOp::SetPassword => {
+                    store.prompt_and_set_password()?;
+                    print_json(&serde_json::json!({
+                        "stored": PASSWORD_SECRET,
+                        "project": store.project(),
+                    }))?;
+                }
+                SecretsOp::ImportKey => {
+                    let (key, removed) = store.import_key(&state_dir)?;
+                    print_json(&serde_json::json!({
+                        "imported": KEY_SECRET,
+                        "endpoint_id": key.public().to_string(),
+                        "project": store.project(),
+                        "removed": removed.display().to_string(),
+                    }))?;
+                }
+                SecretsOp::AccountPassword { username } => {
+                    let password = store.account_password(username)?;
+                    print_json(&serde_json::json!({
+                        "username": username,
+                        "password": password,
+                    }))?;
+                }
+            }
             Ok(())
         }
         Command::Resolve => {
@@ -718,6 +790,7 @@ fn load_settings(cli: &Cli, state_dir: &Path) -> anyhow::Result<Settings> {
     let file: FileConfig =
         toml::from_str(&text).with_context(|| format!("parsing config {}", path.display()))?;
     let discovery = discovery_mode(cli, Some(&file))?;
+    let store = credential_store(Some(&file))?;
     let username = std::env::var("IROH_NEWS_USERNAME")
         .ok()
         .or(file.username)
@@ -734,8 +807,10 @@ fn load_settings(cli: &Cli, state_dir: &Path) -> anyhow::Result<Settings> {
         read_password_file(Path::new(&path))?
     } else if let Some(password_file) = &file.password_file {
         read_password_file(password_file)?
+    } else if let Some(password) = file.password {
+        password
     } else {
-        file.password.unwrap_or_default()
+        store.password()?.unwrap_or_default()
     };
     let from = std::env::var("IROH_NEWS_FROM")
         .ok()
@@ -746,7 +821,7 @@ fn load_settings(cli: &Cli, state_dir: &Path) -> anyhow::Result<Settings> {
         username,
         password,
         from,
-        secret_key: load_or_create_secret_key(state_dir)?,
+        secret_key: store.secret_key(state_dir)?.0,
         relays: !cli.no_relays,
         state_dir: state_dir.to_path_buf(),
         discovery,
@@ -794,7 +869,11 @@ fn read_file_config(cli: &Cli) -> anyhow::Result<Option<FileConfig>> {
     Ok(Some(file))
 }
 
-fn optional_password(file: Option<&FileConfig>) -> anyhow::Result<Option<String>> {
+/// The password from an explicit source, else from SecretSpec.
+fn optional_password(
+    file: Option<&FileConfig>,
+    store: &CredentialStore,
+) -> anyhow::Result<Option<String>> {
     if let Ok(password) = std::env::var("IROH_NEWS_PASSWORD") {
         return Ok(Some(password));
     }
@@ -811,7 +890,21 @@ fn optional_password(file: Option<&FileConfig>) -> anyhow::Result<Option<String>
             return Ok(Some(password.clone()));
         }
     }
-    Ok(None)
+    store.password()
+}
+
+fn credentials_json(store: &CredentialStore, key_source: &KeySource) -> serde_json::Value {
+    let key_provider = match key_source {
+        KeySource::SecretSpec { provider, .. } => provider.clone(),
+        KeySource::StateFile | KeySource::NewStateFile => None,
+    };
+    serde_json::json!({
+        "mode": store.mode_label(),
+        "project": store.project(),
+        "provider": store.configured_provider(),
+        "key": key_source.label(),
+        "key_provider": key_provider,
+    })
 }
 
 async fn admin_args(op: &AdminOp) -> anyhow::Result<(String, serde_json::Value)> {

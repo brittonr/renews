@@ -243,6 +243,19 @@ Replaced with the value of environment variable
 .B $FILE{path}
 Replaced with the contents of the file at
 .IR path .
+.TP
+.B $SECRET{NAME}
+Replaced with the SecretSpec secret
+.I NAME
+from project
+.B renews
+(or
+.BR $RENEWS_SECRETSPEC_PROJECT ),
+profile
+.BR default ,
+through the provider in
+.B SECRETSPEC_PROVIDER
+or the global SecretSpec default. Expanded last; the value is not expanded again.
 .SH FILES
 .TP
 .I /etc/renews.toml

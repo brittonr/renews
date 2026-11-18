@@ -19,13 +19,15 @@ use serde::Serialize;
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 
 mod admin_client;
+pub mod credentials;
 mod discover;
 pub mod mcp;
 pub mod render;
 pub mod snapshot;
 mod watch;
 
-pub use admin_client::{ADMIN_ALPN, JOIN_ALPN, admin_call, join_request, stash_password};
+pub use admin_client::{ADMIN_ALPN, JOIN_ALPN, admin_call, join_request};
+pub use credentials::{CredentialStore, KeySource, SecretSpecSetting};
 
 pub use discover::{
     DiscoveryMode, DiscoveryRecord, DiscoverySource, ResolvedEndpoint, cloudflare_txt_line,
@@ -314,7 +316,9 @@ pub struct JoinRequest<'a> {
     pub name: &'a str,
     pub owner: Option<&'a str>,
     pub server: &'a str,
-    pub state_dir: &'a Path,
+    /// From [`CredentialStore::secret_key`], so the key's store is the
+    /// caller's choice.
+    pub secret_key: &'a SecretKey,
     pub config_path: &'a Path,
 }
 
@@ -391,7 +395,7 @@ pub fn validate_username(name: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Create the endpoint key and a config stub, then build the operator paste block.
+/// Write a config stub, then build the operator paste block.
 ///
 /// Does not open a network connection, does not overwrite an existing config,
 /// and does not create the password file.
@@ -399,7 +403,7 @@ pub fn validate_username(name: &str) -> anyhow::Result<()> {
 /// # Errors
 ///
 /// Returns an error when the username, owner, or server is unusable, or when
-/// the key or config file cannot be written.
+/// the config file cannot be written.
 pub fn prepare_join(request: JoinRequest<'_>) -> anyhow::Result<JoinReport> {
     validate_username(request.name)?;
     if let Some(owner) = request.owner
@@ -416,8 +420,7 @@ pub fn prepare_join(request: JoinRequest<'_>) -> anyhow::Result<JoinReport> {
         bail!("--server must be a single line without quotes or backslashes");
     }
 
-    let key = load_or_create_secret_key(request.state_dir)?;
-    let endpoint_id = key.public().to_string();
+    let endpoint_id = request.secret_key.public().to_string();
     let config_dir = request
         .config_path
         .parent()
@@ -770,16 +773,17 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let state = dir.path().join("state");
         let config = dir.path().join("config/config.toml");
+        let key = load_or_create_secret_key(&state).unwrap();
         let report = prepare_join(JoinRequest {
             name: "ada-grok",
             owner: Some("Ada"),
             server: DEFAULT_JOIN_SERVER,
-            state_dir: &state,
+            secret_key: &key,
             config_path: &config,
         })
         .unwrap();
 
-        assert!(state.join("secret_key").is_file());
+        assert_eq!(report.endpoint_id, key.public().to_string());
         assert!(!report.password_file.exists());
         assert!(report.config_written);
         let stub = std::fs::read_to_string(&config).unwrap();
@@ -802,7 +806,7 @@ mod tests {
             name: "ada-grok",
             owner: None,
             server: DEFAULT_JOIN_SERVER,
-            state_dir: &state,
+            secret_key: &key,
             config_path: &config,
         })
         .unwrap();

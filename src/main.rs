@@ -489,13 +489,13 @@ fn format_duration(secs: u64) -> String {
     const DAY: u64 = 24 * HOUR;
     const WEEK: u64 = 7 * DAY;
 
-    if secs >= WEEK && secs % WEEK == 0 {
+    if secs >= WEEK && secs.is_multiple_of(WEEK) {
         format!("{} week(s)", secs / WEEK)
-    } else if secs >= DAY && secs % DAY == 0 {
+    } else if secs >= DAY && secs.is_multiple_of(DAY) {
         format!("{} day(s)", secs / DAY)
-    } else if secs >= HOUR && secs % HOUR == 0 {
+    } else if secs >= HOUR && secs.is_multiple_of(HOUR) {
         format!("{} hour(s)", secs / HOUR)
-    } else if secs >= MINUTE && secs % MINUTE == 0 {
+    } else if secs >= MINUTE && secs.is_multiple_of(MINUTE) {
         format!("{} minute(s)", secs / MINUTE)
     } else {
         format!("{secs} second(s)")

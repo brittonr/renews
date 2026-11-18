@@ -15,7 +15,9 @@ fn isolated(cmd: &mut Command, home: &std::path::Path) {
         .env_remove("IROH_NEWS_SERVER")
         .env_remove("IROH_NEWS_USERNAME")
         .env_remove("IROH_NEWS_PASSWORD")
-        .env_remove("IROH_NEWS_PASSWORD_FILE");
+        .env_remove("IROH_NEWS_PASSWORD_FILE")
+        .env_remove("SECRETSPEC_PROVIDER")
+        .env_remove("SECRETSPEC_PROFILE");
 }
 
 #[test]

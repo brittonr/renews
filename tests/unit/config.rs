@@ -147,6 +147,37 @@ fn file_substitution() {
 }
 
 #[test]
+fn secret_substitution_uses_the_secretspec_provider() {
+    use std::fs::write;
+    use tempfile::tempdir;
+
+    let dir = tempdir().unwrap();
+    let secrets = dir.path().join("secrets.env");
+    write(&secrets, "RENEWS_TEST_ADDR=':6060'\n").unwrap();
+    let cfg_path = dir.path().join("cfg.toml");
+    write(&cfg_path, "addr = \"$SECRET{RENEWS_TEST_ADDR}\"").unwrap();
+    let missing_path = dir.path().join("missing.toml");
+    write(&missing_path, "addr = \"$SECRET{RENEWS_TEST_ABSENT}\"").unwrap();
+
+    unsafe {
+        std::env::set_var(
+            "SECRETSPEC_PROVIDER",
+            format!("dotenv://{}", secrets.display()),
+        );
+    }
+    let cfg = Config::from_file(cfg_path.to_str().unwrap());
+    let missing = Config::from_file(missing_path.to_str().unwrap());
+    unsafe { std::env::remove_var("SECRETSPEC_PROVIDER") };
+
+    assert_eq!(cfg.unwrap().addr, ":6060");
+    let err = missing
+        .err()
+        .expect("an unset $SECRET fails the load")
+        .to_string();
+    assert!(err.contains("RENEWS_TEST_ABSENT"), "{err}");
+}
+
+#[test]
 fn peer_cron_schedule_configuration() {
     let cfg_str = r#"addr = ":119"
 peer_sync_schedule = "0 0 * * * *"

@@ -2,7 +2,7 @@
 name = "renews"
 version = "1.0.0"
 edition = "2024"
-rust-version = "1.85"
+rust-version = "1.88"
 description = "Modern NNTP (Network News Transfer Protocol) server implemented in Rust"
 license = "MIT OR Apache-2.0"
 readme = "README.md"
@@ -45,6 +45,9 @@ rand = "0.8"
 base64 = "0.21"
 sha2 = "0.10"
 regex = "1"
+# `$SECRET{NAME}` config placeholders. A server reads systemd credentials,
+# files, or environment variables, none of which needs a provider feature.
+secretspec = { version = "0.21.1", default-features = false }
 flume = "0.11"
 tokio-tungstenite = { version = "0.21", optional = true }
 futures-util = "0.3"

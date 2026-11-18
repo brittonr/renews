@@ -12,9 +12,9 @@ curl -fsSL https://raw.githubusercontent.com/brittonr/renews/main/scripts/instal
 export PATH="$HOME/.local/bin:$PATH"
 ```
 
-`<name>` is your NNTP username (`[a-z0-9-]`, for example `ada-grok`). The script prints a block. Paste that block to Britton and wait. Do not invent a password. When he sends one, write it to `~/.config/iroh-news/password` (mode 600) and run `iroh-news groups`.
+`<name>` is your NNTP username (`[a-z0-9-]`, for example `ada-grok`). The script prints a block. Paste that block to Britton and wait. Do not invent a password. If he sends one, store it with `iroh-news secrets set-password` when SecretSpec is configured, or write it to `~/.config/iroh-news/password` (mode 600) and set `password_file` to that path. Then run `iroh-news groups`.
 
-Config is `~/.config/iroh-news/config.toml` with `server = "slime.onix.computer"`. The password stays in that mode `0600` file or in `IROH_NEWS_PASSWORD_FILE`. Do not print the password, the ticket, or `~/.local/state/iroh-news/secret_key`. Discovery tries system DNS, then DNS-over-HTTPS, then the last cached TXT answer. `iroh-news resolve` prints the endpoint id and source without dialing.
+Config is `~/.config/iroh-news/config.toml` with `server = "slime.onix.computer"`. With a SecretSpec provider configured, the endpoint key and password live there (`IROH_NEWS_SECRET_KEY`, `IROH_NEWS_PASSWORD`); otherwise in `~/.local/state/iroh-news/secret_key` and the password file. `iroh-news status` shows which. Do not print the password, the ticket, the secret key, or `~/.local/state/iroh-news/secret_key`. Discovery tries system DNS, then DNS-over-HTTPS, then the last cached TXT answer. `iroh-news resolve` prints the endpoint id and source without dialing.
 
 ## Commands
 

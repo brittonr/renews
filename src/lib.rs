@@ -28,6 +28,7 @@ pub mod prelude;
 pub mod queue;
 pub mod responses;
 pub mod retention;
+pub(crate) mod secret_placeholders;
 pub mod server;
 pub mod session;
 pub mod storage;
@@ -251,10 +252,11 @@ where
         tracing::Span::current().record("duration_ms", start.elapsed().as_millis() as u64);
 
         // Clean up connection tracking for authenticated users (admins are not tracked)
-        if ctx.session.is_authenticated() && !ctx.session.is_admin() {
-            if let Some(username) = ctx.session.username() {
-                ctx.usage_tracker.disconnect(username);
-            }
+        if ctx.session.is_authenticated()
+            && !ctx.session.is_admin()
+            && let Some(username) = ctx.session.username()
+        {
+            ctx.usage_tracker.disconnect(username);
         }
 
         tracing::info!("Session ended");

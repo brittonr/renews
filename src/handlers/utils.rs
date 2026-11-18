@@ -305,19 +305,17 @@ pub async fn handle_article_operation<W: AsyncWrite + Unpin>(
                 };
 
                 // Check bandwidth limit before sending (if applicable)
-                if article_size > 0 {
-                    if let Some(ref bw_ctx) = bandwidth_ctx {
-                        if bw_ctx
-                            .tracker
-                            .check_bandwidth(&bw_ctx.username, article_size)
-                            .await
-                            == LimitCheckResult::BandwidthExceeded
-                        {
-                            Span::current().record("outcome", "rejected_bandwidth");
-                            write_simple(writer, RESP_403_BANDWIDTH_EXCEEDED).await?;
-                            return Ok(());
-                        }
-                    }
+                if article_size > 0
+                    && let Some(ref bw_ctx) = bandwidth_ctx
+                    && bw_ctx
+                        .tracker
+                        .check_bandwidth(&bw_ctx.username, article_size)
+                        .await
+                        == LimitCheckResult::BandwidthExceeded
+                {
+                    Span::current().record("outcome", "rejected_bandwidth");
+                    write_simple(writer, RESP_403_BANDWIDTH_EXCEEDED).await?;
+                    return Ok(());
                 }
 
                 // Use format! to handle arbitrarily long message-IDs
@@ -351,13 +349,13 @@ pub async fn handle_article_operation<W: AsyncWrite + Unpin>(
                 }
 
                 // Record bandwidth usage after successful send
-                if article_size > 0 {
-                    if let Some(ref bw_ctx) = bandwidth_ctx {
-                        bw_ctx
-                            .tracker
-                            .record_bandwidth(&bw_ctx.username, article_size, false)
-                            .await;
-                    }
+                if article_size > 0
+                    && let Some(ref bw_ctx) = bandwidth_ctx
+                {
+                    bw_ctx
+                        .tracker
+                        .record_bandwidth(&bw_ctx.username, article_size, false)
+                        .await;
                 }
             }
             Span::current().record("outcome", "success");
@@ -379,16 +377,15 @@ pub async fn check_bandwidth_rejected<W: AsyncWrite + Unpin>(
 ) -> Result<bool> {
     use crate::responses::RESP_403_BANDWIDTH_EXCEEDED;
 
-    if session.is_authenticated() && !session.is_admin() {
-        if let Some(username) = session.username() {
-            if usage_tracker.check_bandwidth(username, size).await
-                == LimitCheckResult::BandwidthExceeded
-            {
-                Span::current().record("outcome", "rejected_bandwidth");
-                write_simple(writer, RESP_403_BANDWIDTH_EXCEEDED).await?;
-                return Ok(true);
-            }
-        }
+    if session.is_authenticated()
+        && !session.is_admin()
+        && let Some(username) = session.username()
+        && usage_tracker.check_bandwidth(username, size).await
+            == LimitCheckResult::BandwidthExceeded
+    {
+        Span::current().record("outcome", "rejected_bandwidth");
+        write_simple(writer, RESP_403_BANDWIDTH_EXCEEDED).await?;
+        return Ok(true);
     }
     Ok(false)
 }
@@ -400,12 +397,13 @@ pub async fn record_bandwidth_usage(
     size: u64,
     is_upload: bool,
 ) {
-    if session.is_authenticated() && !session.is_admin() {
-        if let Some(username) = session.username() {
-            usage_tracker
-                .record_bandwidth(username, size, is_upload)
-                .await;
-        }
+    if session.is_authenticated()
+        && !session.is_admin()
+        && let Some(username) = session.username()
+    {
+        usage_tracker
+            .record_bandwidth(username, size, is_upload)
+            .await;
     }
 }
 

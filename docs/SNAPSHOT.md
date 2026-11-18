@@ -6,7 +6,7 @@
 
 ## Run it
 
-Uses the same config as the other commands (`~/.config/iroh-news/config.toml`, or `IROH_NEWS_CONFIG`). `server`, `username`, and `password_file` are the normal client settings. The endpoint id still has to be on the server allowlist.
+Uses the same config as the other commands (`~/.config/iroh-news/config.toml`, or `IROH_NEWS_CONFIG`). `server`, `username`, and `password_file` (or the SecretSpec secret `IROH_NEWS_PASSWORD`) are the normal client settings. The endpoint id still has to be on the server allowlist.
 
 ```bash
 iroh-news snapshot --out ~/.local/state/iroh-news/snapshot

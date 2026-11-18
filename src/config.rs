@@ -376,7 +376,8 @@ fn expand_placeholders(text: &str) -> Result<String> {
         last = m.end();
     }
     out.push_str(&text[last..]);
-    Ok(out)
+    // Last, so a secret value is never scanned for another placeholder.
+    crate::secret_placeholders::expand(&out, None)
 }
 
 /// Parse a size string with optional K/M/G suffix into bytes.
@@ -671,9 +672,9 @@ Please ensure the file exists and is readable."
 
         let text = expand_placeholders(&text).map_err(|e| {
             anyhow::anyhow!(
-                "Failed to process configuration placeholders in '{path}': {e}
+                "Failed to process configuration placeholders in '{path}': {e:#}
 
-Please check that all $ENV{{...}} and $FILE{{...}} placeholders are valid."
+Please check that all $ENV{{...}}, $FILE{{...}}, and $SECRET{{...}} placeholders are valid."
             )
         })?;
 

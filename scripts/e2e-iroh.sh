@@ -28,6 +28,13 @@ cleanup() {
 }
 trap cleanup EXIT
 
+# iroh-news uses a configured SecretSpec provider by default. Keep this run
+# out of the developer's provider, config, and state; the SecretSpec section
+# below names its own providers.
+export HOME="$tmp/home" XDG_CONFIG_HOME="$tmp/home/.config" XDG_STATE_HOME="$tmp/home/.local/state"
+unset SECRETSPEC_PROVIDER SECRETSPEC_PROFILE SECRETSPEC_SCOPE
+mkdir -p "$HOME"
+
 mkdir -p "$tmp/state-a" "$tmp/state-b" "$tmp/state-admin" "$tmp/state-join" "$tmp/state-watch"
 id_a=$("$news" --state-dir "$tmp/state-a" id)
 id_b=$("$news" --state-dir "$tmp/state-b" id)
@@ -363,5 +370,53 @@ if "$news" --state-dir "$tmp/state-spoof" --no-relays --server "$ticket" join --
   echo "second endpoint took an approved name" >&2
   exit 1
 fi
+
+# SecretSpec: a generated account password goes to the admin's provider, not
+# a file, and never into the command output.
+cat > "$tmp/admin-spec.toml" <<EOF
+server = "$ticket"
+secretspec = "dotenv://$tmp/admin-secrets.env"
+secretspec_project = "e2e-admin"
+EOF
+created_spec=$("$news" --config "$tmp/admin-spec.toml" --state-dir "$tmp/state-admin" --no-relays admin create-account --username spec-bot)
+printf '%s\n' "$created_spec" | grep -q '"password_secret":"IROH_NEWS_ACCOUNT_SPEC_BOT"'
+printf '%s\n' "$created_spec" | grep -q '"secretspec_project":"e2e-admin"'
+if printf '%s\n' "$created_spec" | grep -q '"password_file"'; then
+  echo "create-account wrote a password file instead of SecretSpec" >&2
+  exit 1
+fi
+spec_pass=$("$news" --config "$tmp/admin-spec.toml" --state-dir "$tmp/state-admin" secrets account-password --username spec-bot \
+  | sed -n 's/.*"password":"\([^"]*\)".*/\1/p')
+test -n "$spec_pass"
+if printf '%s\n' "$created_spec" | grep -qF -- "$spec_pass"; then
+  echo "create-account printed the password" >&2
+  exit 1
+fi
+
+# No secretspec setting: SECRETSPEC_PROVIDER alone puts the bot's key and
+# password in the provider, and no key file is written.
+spec_bot() {
+  SECRETSPEC_PROVIDER="dotenv://$tmp/bot-secrets.env" "$news" --state-dir "$tmp/state-spec" "$@"
+}
+mkdir -p "$tmp/state-spec"
+cat > "$tmp/spec-bot.toml" <<EOF
+server = "$ticket"
+username = "spec-bot"
+EOF
+cat > "$tmp/spec-status.toml" <<EOF
+server = "$ticket"
+EOF
+spec_id=$(spec_bot --config "$tmp/spec-bot.toml" id | sed -n 's/.*"endpoint_id":"\([^"]*\)".*/\1/p')
+test -n "$spec_id"
+test ! -e "$tmp/state-spec/secret_key"
+grep -q '^IROH_NEWS_SECRET_KEY=' "$tmp/bot-secrets.env"
+test "$(spec_bot --config "$tmp/spec-bot.toml" id | sed -n 's/.*"endpoint_id":"\([^"]*\)".*/\1/p')" = "$spec_id"
+printf '%s\n' "$spec_pass" | spec_bot --config "$tmp/spec-bot.toml" secrets set-password > /dev/null
+"$news" --config "$tmp/admin.toml" --state-dir "$tmp/state-admin" --no-relays admin add-peer --endpoint-id "$spec_id" --label spec-bot
+printf '%s\n' 'password from secretspec' | spec_bot --config "$tmp/spec-bot.toml" --no-relays post \
+  --group bots.general --subject 'from spec-bot'
+spec_status=$(spec_bot --config "$tmp/spec-status.toml" status)
+printf '%s\n' "$spec_status" | grep -q '"key":"secretspec"'
+printf '%s\n' "$spec_status" | grep -q '"password_configured":true'
 
 echo "e2e ok"

@@ -203,7 +203,7 @@ patterns = ["comp.*", "!comp.sys.mac.*"]       # Include/exclude patterns
 
 ## Variable Substitution
 
-Configuration supports environment variables and file inclusion:
+Configuration supports environment variables, file inclusion, and SecretSpec secrets:
 
 ### Environment Variables
 
@@ -219,6 +219,28 @@ tls_cert = "$FILE{/etc/ssl/certs/news.crt}"
 ```
 
 This replaces the value with the contents of the specified file.
+
+### SecretSpec Secrets
+
+```toml
+auth_db_path = "postgres://renews:$SECRET{RENEWS_DB_PASSWORD}@db.internal/renews"
+
+[[peers]]
+sitename = "peer:$SECRET{RENEWS_PEER_PASSWORD}@news.example.com:119"
+```
+
+Each `$SECRET{NAME}` is a required secret in the [SecretSpec](https://secretspec.dev)
+project `renews` (override with `RENEWS_SECRETSPEC_PROJECT`), profile `default`.
+SecretSpec reads it through the provider in `SECRETSPEC_PROVIDER` or the global
+default set by `secretspec config global init`. Names match `[A-Za-z_][A-Za-z0-9_]*`.
+`$SECRET` placeholders are expanded after `$ENV` and `$FILE`, and the inserted
+values are not scanned again. A missing secret or provider stops the server with
+an error that names the secret. Configurations without `$SECRET` do not load
+SecretSpec.
+
+Under systemd, `SECRETSPEC_PROVIDER=systemd-credential://` reads
+`$CREDENTIALS_DIRECTORY/NAME`, so `LoadCredential=NAME:/path` in the unit
+supplies the value from a root-only file.
 
 ## PostgreSQL Backend
 

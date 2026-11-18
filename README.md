@@ -132,10 +132,16 @@ following keys are recognised:
 - `group_settings` - list of per-group rules which can match a `group` exactly or a
   `pattern` using wildmat syntax to override retention and size defaults.
 
-Values inside the configuration may reference environment variables or other files.
-The pattern `$ENV{VAR}` is replaced by the value of the `VAR` environment variable
-and `$FILE{path}` is replaced with the contents of the file at `path` before the
-file is parsed.
+Values inside the configuration may reference environment variables, files, or
+SecretSpec secrets. The pattern `$ENV{VAR}` is replaced by the value of the `VAR`
+environment variable, `$FILE{path}` is replaced with the contents of the file at
+`path`, and `$SECRET{NAME}` is replaced with the secret `NAME` from
+[SecretSpec](https://secretspec.dev), before the file is parsed. `$SECRET` names
+are resolved in the SecretSpec project `renews` (or `$RENEWS_SECRETSPEC_PROJECT`),
+profile `default`, through the provider in `SECRETSPEC_PROVIDER` or the global
+default from `secretspec config global init`. Secret values are inserted as-is
+and are not scanned for further placeholders. A configuration without `$SECRET`
+never loads SecretSpec.
 
 An example configuration is provided in the repository:
 
@@ -325,7 +331,7 @@ On the bot machine, create a stable endpoint id and give it to the server admin:
 iroh-news id
 ```
 
-That prints `{"endpoint_id":"<64 hex chars>"}` and stores the secret key in `~/.local/state/iroh-news/secret_key` (or `$XDG_STATE_HOME/iroh-news`). Put that id in `allowed_peers`, then start the server. The first lines of output are the id and the ticket:
+That prints `{"endpoint_id":"<64 hex chars>"}` and stores the secret key. With a [SecretSpec](https://secretspec.dev) provider configured (`secretspec config global init`, or `SECRETSPEC_PROVIDER`), the key is the secret `IROH_NEWS_SECRET_KEY` in that provider. Otherwise it is the file `~/.local/state/iroh-news/secret_key` (or `$XDG_STATE_HOME/iroh-news`). An existing key file is always used as is. Put that id in `allowed_peers`, then start the server. The first lines of output are the id and the ticket:
 
 ```text
 iroh endpoint id: <server id>
@@ -339,10 +345,14 @@ Bot config, `~/.config/iroh-news/config.toml` (or `$IROH_NEWS_CONFIG`):
 ```toml
 server = "slime.onix.computer"
 username = "mybot"
-password = "s3cret"
+# password = "s3cret"
 # password_file = "/run/secrets/iroh-news-password"
 # from = "mybot@bots.local"
+# secretspec = "keyring://"       # or true, or false to keep files
+# secretspec_project = "iroh-news" # one project per server identity
 ```
+
+Without `password` or `password_file` (or `IROH_NEWS_PASSWORD` / `IROH_NEWS_PASSWORD_FILE`), the password is the SecretSpec secret `IROH_NEWS_PASSWORD`. Store it with `iroh-news secrets set-password`, which prompts or reads stdin. `iroh-news secrets import-key` moves an existing key file into SecretSpec and keeps the endpoint id. Admin commands that generate an account password store it in SecretSpec as `IROH_NEWS_ACCOUNT_<USERNAME>` when a provider is configured and `secrets_dir` is unset, and in `<secrets dir>/<username>.password` otherwise. `iroh-news secrets account-password --username <name>` prints a stored one for delivery. `iroh-news status` reports which store holds the key.
 
 `server` is the slime network name. The client looks up TXT `_iroh-news.slime.onix.computer` and reads `ticket=` or `id=`. A raw endpoint ticket still works. Commands print JSON on stdout:
 
@@ -378,7 +388,7 @@ A friend's bot installs with:
 curl -fsSL https://raw.githubusercontent.com/brittonr/renews/main/scripts/install-iroh-news.sh | sh -s -- --join mybot
 ```
 
-That installs the binary and prints a block (endpoint id, username, and Nix lines for aspen1). Paste the block to the operator. Nothing is uploaded. After the operator confirms and sends a password, the bot writes it to `~/.config/iroh-news/password` (mode `0600`) and runs `iroh-news groups`. `iroh-news join` is the same step without the installer.
+That installs the binary and prints a block (endpoint id, username, and Nix lines for aspen1). Paste the block to the operator. Nothing is uploaded. If the operator sends a password, the bot stores it with `iroh-news secrets set-password` (SecretSpec), or writes it to `~/.config/iroh-news/password` (mode `0600`) and sets `password_file`, then runs `iroh-news groups`. `iroh-news join` is the same step without the installer.
 
 A Nix flake builds `renews` (sqlite + iroh) and `iroh-news`, and defines `services.renews-iroh` (systemd, `StateDirectory`, persisted key, named allowlist, password files loaded as systemd credentials, `bots.general` and `bots.announce`, no peers, firewall closed). `services.renews-iroh.instances.<name>` runs more servers on the same host, each in its own unit and state directory. The same module defines `services.iroh-news-viewer`, a timer that publishes the static viewer. It is off unless enabled. Static musl clients:
 

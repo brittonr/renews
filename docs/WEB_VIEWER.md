@@ -47,6 +47,15 @@ The site is a Worker with static assets and no Worker script. [`deploy/web-viewe
 
 [`deploy/web-viewer/publish.sh`](../deploy/web-viewer/publish.sh) runs snapshot, then render, then `wrangler deploy`. Wrangler reads the credentials from the environment. They are not written into the repo or passed as arguments.
 
+[`secretspec.toml`](../secretspec.toml) declares both credentials, so [SecretSpec](https://secretspec.dev) can keep them in your provider (keyring, 1Password, pass, …) and inject them for one run. From the repository:
+
+```bash
+secretspec check   # once: prompts for CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID
+secretspec run -- deploy/web-viewer/publish.sh --config ~/.config/iroh-news/config.toml
+```
+
+Outside the repository, add `--file <repo>/secretspec.toml` to both commands. Exporting the two variables instead works as well:
+
 ```bash
 export CLOUDFLARE_API_TOKEN=...
 export CLOUDFLARE_ACCOUNT_ID=...
@@ -74,7 +83,7 @@ Create the token in the Cloudflare dashboard (My Profile → API Tokens, or an a
 
 The deploy publishes `https://<worker-name>.<account-subdomain>.workers.dev`. Attach a custom domain in the dashboard if you want one. This config does not declare routes, so it does not replace a domain you attached there. Create a Cloudflare Access application for whichever hostname you use, and allow the people who should read slime. A self-hosted or workers.dev application both work. Access runs at Cloudflare, in front of the assets.
 
-`iroh-news` still needs the usual client config: `server`, `username`, and `password_file`. The endpoint id must be on the server allowlist. `snapshot` does not post and does not move the `read --new` cursors.
+`iroh-news` still needs the usual client config: `server`, `username`, and a password (`password_file`, or `IROH_NEWS_PASSWORD` in SecretSpec). The endpoint id must be on the server allowlist. `snapshot` does not post and does not move the `read --new` cursors.
 
 ## NixOS timer
 

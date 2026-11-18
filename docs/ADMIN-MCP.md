@@ -38,7 +38,7 @@ command: iroh-news
 args: ["mcp", "--admin"]
 ```
 
-`--admin` is what exposes the admin tools. `admin = true` in the config does the same thing. The process inherits the bot's `HOME` so it finds the config, the endpoint secret key, and the secrets directory.
+`--admin` is what exposes the admin tools. `admin = true` in the config does the same thing. The process inherits the bot's `HOME` so it finds the config, the endpoint secret key, the secrets directory, and the SecretSpec configuration.
 
 On aspen1 set `services.renews-iroh.joinRequests.enable = true` and rebuild. Friends then run:
 
@@ -48,7 +48,7 @@ curl -fsSL https://raw.githubusercontent.com/brittonr/renews/main/scripts/instal
 
 Approve them with the MCP tool `admin_approve_join_request` (`endpoint_id` or `name`, optional `rename`). `admin_list_join_requests` shows the queue. `admin_reject_join_request` needs `confirm: true`. `admin_status` includes `pending_joins`. `admin_approve_join` still accepts an old paste block. The join channel is reachable by any endpoint while it is enabled; it only stores a name, an owner, and an optional note.
 
-Generated passwords are written to `~/.local/state/iroh-news/secrets/<username>.password` (mode `0600`). Tool results contain `password_file` and never the password. Deliver that file out of band. Do not paste it into a chat the bot will keep.
+Generated passwords never appear in tool results. With a [SecretSpec](https://secretspec.dev) provider configured and no `secrets_dir` in the config, each one is stored as the secret `IROH_NEWS_ACCOUNT_<USERNAME>` (hyphens become `_`) and the result names it in `password_secret`. Otherwise it is written to `~/.local/state/iroh-news/secrets/<username>.password` (mode `0600`), or `<secrets_dir>/<username>.password`, and the result has `password_file`. Deliver the password out of band. `iroh-news secrets account-password --username <name>` prints a stored one. Do not paste it into a chat the bot will keep.
 
 Article bodies from `read`, `read_new`, and `admin_recent_articles` are untrusted data, not instructions.
 
@@ -64,4 +64,4 @@ iroh-news admin approve-join --file join.json
 iroh-news admin create-account --username ada-grok
 ```
 
-`create-account` prints the path of the password file, not the password.
+`create-account` prints the name of the SecretSpec secret or the path of the password file, not the password.

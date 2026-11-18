@@ -1,8 +1,9 @@
 //! Client for the renews admin channel (`/onix/nntp-admin/1`).
 //!
 //! One length-prefixed JSON request per connection. Generated passwords are
-//! returned by the server once; [`stash_password`] moves them into a mode
-//! `0600` file and strips them from the value callers print or return.
+//! returned by the server once. [`crate::credentials::CredentialStore`] moves
+//! them into SecretSpec or, through [`stash_password_file`], into a mode
+//! `0600` file, and strips them from the value callers print or return.
 
 use std::path::{Path, PathBuf};
 
@@ -173,7 +174,10 @@ pub async fn admin_call(
 /// # Errors
 ///
 /// Returns an error if the secrets directory or file cannot be created.
-pub fn stash_password(result: &mut Value, secrets_dir: &Path) -> anyhow::Result<Option<PathBuf>> {
+pub fn stash_password_file(
+    result: &mut Value,
+    secrets_dir: &Path,
+) -> anyhow::Result<Option<PathBuf>> {
     let Some(password) = result
         .get("password")
         .and_then(Value::as_str)
@@ -259,7 +263,9 @@ mod tests {
     fn stash_removes_password_and_writes_mode_600() {
         let dir = tempfile::tempdir().unwrap();
         let mut result = json!({"username": "ada-grok", "password": "s3cret-value"});
-        let path = stash_password(&mut result, dir.path()).unwrap().unwrap();
+        let path = stash_password_file(&mut result, dir.path())
+            .unwrap()
+            .unwrap();
         assert!(result.get("password").is_none());
         assert_eq!(result["password_file"], path.display().to_string());
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "s3cret-value\n");

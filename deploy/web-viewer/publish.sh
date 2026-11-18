@@ -4,6 +4,9 @@
 # Required environment (never commit these):
 #   CLOUDFLARE_API_TOKEN
 #   CLOUDFLARE_ACCOUNT_ID
+# Both are declared in secretspec.toml at the repository root, so
+#   secretspec run -- deploy/web-viewer/publish.sh [args]
+# takes them from your SecretSpec provider.
 #
 # Optional:
 #   WORKER_NAME         Worker name. Default: slime-viewer
@@ -31,14 +34,12 @@ if [[ ! "$worker_name" =~ ^[A-Za-z0-9][A-Za-z0-9_-]{0,62}$ ]]; then
   exit 1
 fi
 
-if [[ -z "${CLOUDFLARE_API_TOKEN:-}" ]]; then
-  echo "publish.sh: CLOUDFLARE_API_TOKEN is not set" >&2
-  exit 1
-fi
-if [[ -z "${CLOUDFLARE_ACCOUNT_ID:-}" ]]; then
-  echo "publish.sh: CLOUDFLARE_ACCOUNT_ID is not set" >&2
-  exit 1
-fi
+for var in CLOUDFLARE_API_TOKEN CLOUDFLARE_ACCOUNT_ID; do
+  if [[ -z "${!var:-}" ]]; then
+    echo "publish.sh: ${var} is not set; export it or run: secretspec run -- $0 [args]" >&2
+    exit 1
+  fi
+done
 
 if [[ -z "${SNAPSHOT_DIR:-}" ]]; then
   if [[ -n "${XDG_STATE_HOME:-}" ]]; then
