@@ -127,6 +127,10 @@ impl DiscoveryRecord {
         }
     }
 
+    fn endpoint_id(&self) -> anyhow::Result<EndpointId> {
+        Ok(self.clone().into_addr()?.id)
+    }
+
     fn into_addr(self) -> anyhow::Result<EndpointAddr> {
         match self {
             Self::Ticket(ticket) => {
@@ -289,33 +293,41 @@ async fn resolve_server(
 /// Direct tickets and endpoint ids skip DNS. A DNS name follows `mode`:
 /// system DNS, DNS-over-HTTPS, then the cached last-good record.
 ///
+/// With `server_id`, the answer must name that endpoint. A TXT answer naming
+/// another is skipped (and not cached), so the next lookup gets a chance; a
+/// ticket, pinned host or cached record naming another is an error.
+///
 /// # Errors
 ///
-/// Returns an error when a ticket or id is malformed, or when every lookup
-/// misses and no cached answer exists.
+/// Returns an error when a ticket or id is malformed, when every lookup
+/// misses and no cached answer exists, or when the answer is not `server_id`.
 pub async fn discover(
     server: &str,
     state_dir: &Path,
     mode: DiscoveryMode,
+    server_id: Option<EndpointId>,
 ) -> anyhow::Result<ResolvedEndpoint> {
-    discover_with(server, state_dir, mode, &HickoryTxt, &ReqwestDoh).await
+    discover_with(server, state_dir, mode, server_id, &HickoryTxt, &ReqwestDoh).await
 }
 
 async fn discover_with(
     server: &str,
     state_dir: &Path,
     mode: DiscoveryMode,
+    server_id: Option<EndpointId>,
     system: &impl TxtLookup,
     doh: &impl DohTxt,
 ) -> anyhow::Result<ResolvedEndpoint> {
     let server = server.trim();
     if let Some(addr) = parse_direct(server)? {
+        check_server_id(addr.id, server_id).map_err(|err| anyhow::anyhow!("server {err}"))?;
         return Ok(ResolvedEndpoint {
             addr,
             source: DiscoverySource::Direct,
         });
     }
     if let Some((id, host)) = split_pinned_host(server)? {
+        check_server_id(id, server_id).map_err(|err| anyhow::anyhow!("server {err}"))?;
         return Ok(ResolvedEndpoint {
             addr: resolve_pinned_host(id, host).await?,
             source: DiscoverySource::Host,
@@ -325,7 +337,7 @@ async fn discover_with(
     let mut misses = Vec::new();
 
     if mode.uses_system() {
-        match lookup_usable(system.lookup_txt(&qname).await, "system DNS") {
+        match lookup_usable(system.lookup_txt(&qname).await, "system DNS", server_id) {
             Ok(Some(record)) => {
                 return finish(state_dir, server, record, DiscoverySource::System);
             }
@@ -342,6 +354,7 @@ async fn discover_with(
             match lookup_usable(
                 doh.lookup_txt(provider, &qname).await,
                 &provider.to_string(),
+                server_id,
             ) {
                 Ok(Some(record)) => return finish(state_dir, server, record, source),
                 Ok(None) => {
@@ -353,9 +366,16 @@ async fn discover_with(
     }
 
     if let Some(cached) = read_discovery_cache(state_dir, server)? {
+        let addr = cached.into_addr()?;
+        if let Err(err) = check_server_id(addr.id, server_id) {
+            bail!(
+                "no usable record for TXT {qname} ({}); the cached record {err}",
+                misses.join("; ")
+            );
+        }
         tracing::warn!(name = server, "discovery missed; using the cached record");
         return Ok(ResolvedEndpoint {
-            addr: cached.into_addr()?,
+            addr,
             source: DiscoverySource::Cache,
         });
     }
@@ -366,13 +386,32 @@ async fn discover_with(
     )
 }
 
+/// A record from one lookup, `None` when it has no `ticket=` or `id=`, and an
+/// error when the lookup failed or the record names another endpoint than
+/// `server_id`.
 fn lookup_usable(
     result: anyhow::Result<Vec<String>>,
     label: &str,
+    server_id: Option<EndpointId>,
 ) -> Result<Option<DiscoveryRecord>, String> {
-    match result {
-        Ok(records) => Ok(parse_txt_records(&records).ok()),
-        Err(err) => Err(format!("{label}: {err:#}")),
+    let records = result.map_err(|err| format!("{label}: {err:#}"))?;
+    let Ok(record) = parse_txt_records(&records) else {
+        return Ok(None);
+    };
+    let id = record
+        .endpoint_id()
+        .map_err(|err| format!("{label}: {err:#}"))?;
+    check_server_id(id, server_id).map_err(|err| format!("{label}: TXT {err}"))?;
+    Ok(Some(record))
+}
+
+/// `Err` when `server_id` pins an endpoint other than `id`.
+fn check_server_id(id: EndpointId, server_id: Option<EndpointId>) -> Result<(), String> {
+    match server_id {
+        Some(pinned) if pinned != id => {
+            Err(format!("names endpoint {id}, but server_id pins {pinned}"))
+        }
+        _ => Ok(()),
     }
 }
 
@@ -849,6 +888,7 @@ mod tests {
             "slime.onix.computer",
             dir.path(),
             DiscoveryMode::Auto,
+            None,
             &system,
             &doh,
         )
@@ -878,6 +918,7 @@ mod tests {
             "slime.onix.computer",
             dir.path(),
             DiscoveryMode::Auto,
+            None,
             &system,
             &doh,
         )
@@ -908,6 +949,7 @@ mod tests {
             "slime.onix.computer",
             dir.path(),
             DiscoveryMode::Auto,
+            None,
             &system,
             &doh,
         )
@@ -940,6 +982,7 @@ mod tests {
             "slime.onix.computer",
             dir.path(),
             DiscoveryMode::Auto,
+            None,
             &system,
             &doh,
         )
@@ -962,6 +1005,7 @@ mod tests {
             "slime.onix.computer",
             dir.path(),
             DiscoveryMode::System,
+            None,
             &system,
             &doh,
         )
@@ -974,6 +1018,7 @@ mod tests {
             "slime.onix.computer",
             dir.path(),
             DiscoveryMode::Doh,
+            None,
             &system,
             &doh,
         )
@@ -993,9 +1038,16 @@ mod tests {
         };
         let doh = fake_doh(Err("unused".into()), Err("unused".into()));
         let dir = tempfile::tempdir().unwrap();
-        let resolved = discover_with(&ticket, dir.path(), DiscoveryMode::Auto, &system, &doh)
-            .await
-            .unwrap();
+        let resolved = discover_with(
+            &ticket,
+            dir.path(),
+            DiscoveryMode::Auto,
+            None,
+            &system,
+            &doh,
+        )
+        .await
+        .unwrap();
         assert_eq!(resolved.source, DiscoverySource::Direct);
         assert_eq!(*system.calls.lock().unwrap(), 0);
         assert!(doh.calls.lock().unwrap().is_empty());
@@ -1035,9 +1087,16 @@ mod tests {
         let doh = fake_doh(Err("unused".into()), Err("unused".into()));
         let dir = tempfile::tempdir().unwrap();
         let server = format!("{id}@127.0.0.1:1119");
-        let resolved = discover_with(&server, dir.path(), DiscoveryMode::Auto, &system, &doh)
-            .await
-            .unwrap();
+        let resolved = discover_with(
+            &server,
+            dir.path(),
+            DiscoveryMode::Auto,
+            None,
+            &system,
+            &doh,
+        )
+        .await
+        .unwrap();
         assert_eq!(resolved.source, DiscoverySource::Host);
         assert_eq!(resolved.addr.id, id);
         let addrs: Vec<SocketAddr> = resolved.addr.ip_addrs().copied().collect();
@@ -1062,5 +1121,147 @@ mod tests {
         let (parsed, host) = split_pinned_host(&server).unwrap().unwrap();
         assert_eq!(parsed, id);
         assert_eq!(host, "swarm.example:1119");
+    }
+
+    fn ticket_id(ticket: &str) -> EndpointId {
+        DiscoveryRecord::Ticket(ticket.to_string())
+            .endpoint_id()
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn server_id_skips_a_txt_answer_naming_another_endpoint() {
+        let good = sample_ticket();
+        let system = MapLookup {
+            records: vec![format!("ticket={}", sample_ticket())],
+            calls: Mutex::new(0),
+            fail: false,
+        };
+        let doh = fake_doh(Ok(vec![format!("ticket={good}")]), Err("unused".into()));
+        let dir = tempfile::tempdir().unwrap();
+        let resolved = discover_with(
+            "slime.onix.computer",
+            dir.path(),
+            DiscoveryMode::Auto,
+            Some(ticket_id(&good)),
+            &system,
+            &doh,
+        )
+        .await
+        .unwrap();
+        assert_eq!(resolved.source, DiscoverySource::DohCloudflare);
+        assert_eq!(resolved.addr.id, ticket_id(&good));
+        let cached =
+            std::fs::read_to_string(dir.path().join("discovery/slime.onix.computer")).unwrap();
+        assert_eq!(cached, format!("ticket={good}"));
+    }
+
+    #[tokio::test]
+    async fn server_id_rejects_and_does_not_cache_answers_naming_another_endpoint() {
+        let pinned = SecretKey::generate().public();
+        let other = sample_ticket();
+        let system = MapLookup {
+            records: vec![format!("ticket={other}")],
+            calls: Mutex::new(0),
+            fail: false,
+        };
+        let doh = fake_doh(
+            Ok(vec![format!("ticket={other}")]),
+            Ok(vec![format!("id={}", ticket_id(&other))]),
+        );
+        let dir = tempfile::tempdir().unwrap();
+        let err = discover_with(
+            "slime.onix.computer",
+            dir.path(),
+            DiscoveryMode::Auto,
+            Some(pinned),
+            &system,
+            &doh,
+        )
+        .await
+        .unwrap_err();
+        let text = format!("{err:#}");
+        assert!(text.contains(&format!("server_id pins {pinned}")), "{text}");
+        assert_eq!(
+            doh.calls.lock().unwrap().as_slice(),
+            ["cloudflare", "google"]
+        );
+        assert!(!dir.path().join("discovery/slime.onix.computer").exists());
+    }
+
+    #[tokio::test]
+    async fn server_id_rejects_a_cached_record_naming_another_endpoint() {
+        let pinned = SecretKey::generate().public();
+        let system = MapLookup {
+            records: vec![],
+            calls: Mutex::new(0),
+            fail: true,
+        };
+        let doh = fake_doh(Err("offline".into()), Err("offline".into()));
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("discovery")).unwrap();
+        std::fs::write(
+            dir.path().join("discovery/slime.onix.computer"),
+            format!("ticket={}", sample_ticket()),
+        )
+        .unwrap();
+        let err = discover_with(
+            "slime.onix.computer",
+            dir.path(),
+            DiscoveryMode::Auto,
+            Some(pinned),
+            &system,
+            &doh,
+        )
+        .await
+        .unwrap_err();
+        let text = format!("{err:#}");
+        assert!(text.contains("the cached record names endpoint"), "{text}");
+    }
+
+    #[tokio::test]
+    async fn server_id_checks_tickets_ids_and_pinned_hosts() {
+        let pinned = SecretKey::generate().public();
+        let other = SecretKey::generate().public();
+        let system = MapLookup {
+            records: vec![],
+            calls: Mutex::new(0),
+            fail: true,
+        };
+        let doh = fake_doh(Err("unused".into()), Err("unused".into()));
+        let dir = tempfile::tempdir().unwrap();
+        for server in [
+            sample_ticket(),
+            other.to_string(),
+            format!("{other}@127.0.0.1:1119"),
+        ] {
+            let err = discover_with(
+                &server,
+                dir.path(),
+                DiscoveryMode::Auto,
+                Some(pinned),
+                &system,
+                &doh,
+            )
+            .await
+            .unwrap_err();
+            assert!(
+                err.to_string().contains("server_id pins"),
+                "{server}: {err}"
+            );
+        }
+        let resolved = discover_with(
+            &format!("{pinned}@127.0.0.1:1119"),
+            dir.path(),
+            DiscoveryMode::Auto,
+            Some(pinned),
+            &system,
+            &doh,
+        )
+        .await
+        .unwrap();
+        assert_eq!(resolved.addr.id, pinned);
+        assert_eq!(*system.calls.lock().unwrap(), 0);
+        assert!(doh.calls.lock().unwrap().is_empty());
     }
 }

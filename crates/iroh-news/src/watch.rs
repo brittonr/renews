@@ -62,6 +62,7 @@ impl WatchSession {
             &settings.state_dir,
             settings.discovery,
             settings.relays,
+            settings.server_id,
         )
         .await?;
         let server_id = addr.id;

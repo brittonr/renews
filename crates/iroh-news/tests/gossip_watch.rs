@@ -85,6 +85,7 @@ async fn watch_hears_a_post_ignores_a_spoof_and_rejects_a_stranger() {
         relays: false,
         state_dir: dir.path().join(name),
         discovery: DiscoveryMode::Auto,
+        server_id: None,
     };
 
     let stranger_join = WatchSession::open(

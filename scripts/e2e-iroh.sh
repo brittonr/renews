@@ -412,6 +412,7 @@ spec_bot() {
 mkdir -p "$tmp/state-spec"
 cat > "$tmp/spec-bot.toml" <<EOF
 server = "$endpoint_id@localhost:41119"
+server_id = "$endpoint_id"
 username = "spec-bot"
 relays = false
 EOF
@@ -430,5 +431,18 @@ printf '%s\n' 'password from secretspec' | spec_bot --config "$tmp/spec-bot.toml
 spec_status=$(spec_bot --config "$tmp/spec-status.toml" status)
 printf '%s\n' "$spec_status" | grep -q '"key":"secretspec"'
 printf '%s\n' "$spec_status" | grep -q '"password_configured":true'
+
+# A server_id naming another endpoint stops the client before it dials.
+cat > "$tmp/spec-wrong-pin.toml" <<EOF
+server = "$endpoint_id@localhost:41119"
+server_id = "$spec_id"
+username = "spec-bot"
+relays = false
+EOF
+if wrong_pin=$(spec_bot --config "$tmp/spec-wrong-pin.toml" groups 2>&1); then
+  echo "a mismatched server_id still connected" >&2
+  exit 1
+fi
+printf '%s\n' "$wrong_pin" | grep -q "server_id pins $spec_id"
 
 echo "e2e ok"

@@ -340,7 +340,7 @@ iroh ticket: endpoint<base32...>
 
 `allowed_peers` is re-read on `SIGHUP`. The key file and the TCP listen address are not.
 
-For a server that only one private network may reach, such as a tailnet, set `bind_addr = "<tailnet address>:<port>"` and `relays = false` under `[iroh]`. The endpoint then skips the n0 relays and n0 address lookup, and its ticket holds only that address. Clients set `relays = false` and `server = "<endpoint id>@<host>:<port>"`: the id stays pinned and the host's A record gives the address. See [docs/DEPLOY.md](docs/DEPLOY.md#a-server-only-a-tailnet-can-reach).
+For a server that only one private network may reach, such as a tailnet, set `bind_addr = "<tailnet address>:<port>"` and `relays = false` under `[iroh]`. The endpoint then skips the n0 relays and n0 address lookup, and its ticket holds only that address. Publish that ticket as the name's TXT record (`renews admin discovery-txt <name> --ticket`). Clients set `relays = false`, `server = "<name>"` and `server_id = "<endpoint id>"`: an answer naming any other endpoint is refused. See [docs/DEPLOY.md](docs/DEPLOY.md#a-server-only-a-tailnet-can-reach).
 
 Bot config, `~/.config/iroh-news/config.toml` (or `$IROH_NEWS_CONFIG`):
 
@@ -353,6 +353,7 @@ username = "mybot"
 # secretspec = "keyring://"       # or true, or false to keep files
 # secretspec_project = "iroh-news" # one project per server identity
 # relays = false                   # only for a server that has relays off
+# server_id = "<64 hex>"           # refuse any other server endpoint
 ```
 
 Without `password` or `password_file` (or `IROH_NEWS_PASSWORD` / `IROH_NEWS_PASSWORD_FILE`), the password is the SecretSpec secret `IROH_NEWS_PASSWORD`. Store it with `iroh-news secrets set-password`, which prompts or reads stdin. `iroh-news secrets import-key` moves an existing key file into SecretSpec and keeps the endpoint id. Admin commands that generate an account password store it in SecretSpec as `IROH_NEWS_ACCOUNT_<USERNAME>` when a provider is configured and `secrets_dir` is unset, and in `<secrets dir>/<username>.password` otherwise. `iroh-news secrets account-password --username <name>` prints a stored one for delivery. `iroh-news status` reports which store holds the key.

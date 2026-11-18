@@ -7,7 +7,7 @@
 
 use std::path::PathBuf;
 
-use iroh::SecretKey;
+use iroh::{EndpointId, SecretKey};
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::{
     CallToolResult, ContentBlock, Implementation, ProtocolVersion, ServerCapabilities, ServerConfig,
@@ -35,6 +35,7 @@ struct McpState {
     default_secrets_dir: PathBuf,
     store: CredentialStore,
     discovery: DiscoveryMode,
+    server_id: Option<EndpointId>,
 }
 
 impl McpState {
@@ -58,6 +59,7 @@ impl McpState {
             relays: self.relays,
             state_dir: self.state_dir.clone(),
             discovery: self.discovery,
+            server_id: self.server_id,
         })
     }
 
@@ -77,6 +79,7 @@ impl McpState {
             relays: self.relays,
             state_dir: self.state_dir.clone(),
             discovery: self.discovery,
+            server_id: self.server_id,
         })
     }
 
@@ -93,6 +96,7 @@ impl McpState {
             op,
             args,
             self.discovery,
+            self.server_id,
         )
         .await?;
         self.store.stash_account_password(
@@ -842,6 +846,8 @@ pub struct McpConfig {
     pub store: CredentialStore,
     pub admin: bool,
     pub discovery: DiscoveryMode,
+    /// Pinned server endpoint id, from the config.
+    pub server_id: Option<EndpointId>,
 }
 
 /// Serve MCP on stdio until stdin closes.
@@ -862,6 +868,7 @@ pub async fn serve(config: McpConfig) -> anyhow::Result<()> {
         default_secrets_dir: config.default_secrets_dir,
         store: config.store,
         discovery: config.discovery,
+        server_id: config.server_id,
     };
     if config.admin {
         let service = AdminMcp::new(state)

@@ -30,6 +30,7 @@ fn settings(
         relays: false,
         state_dir: dir.to_path_buf(),
         discovery: DiscoveryMode::Auto,
+        server_id: None,
     }
 }
 
@@ -100,6 +101,7 @@ async fn admin_rejects_bots_and_runtime_peer_connects() {
         "status",
         json!({}),
         DiscoveryMode::Auto,
+        None,
     )
     .await
     .expect_err("bot allowlist must not open the admin channel");
@@ -114,6 +116,7 @@ async fn admin_rejects_bots_and_runtime_peer_connects() {
         "status",
         json!({}),
         DiscoveryMode::Auto,
+        None,
     )
     .await
     .expect_err("stranger");
@@ -128,6 +131,7 @@ async fn admin_rejects_bots_and_runtime_peer_connects() {
         "status",
         json!({}),
         DiscoveryMode::Auto,
+        None,
     )
     .await
     .expect("admin status");
@@ -142,6 +146,7 @@ async fn admin_rejects_bots_and_runtime_peer_connects() {
         "remove_peer",
         json!({"endpoint_id": bot_id, "confirm": true}),
         DiscoveryMode::Auto,
+        None,
     )
     .await
     .expect_err("nix peer");
@@ -160,6 +165,7 @@ async fn admin_rejects_bots_and_runtime_peer_connects() {
         "approve_join",
         json!({"block": {"username": "newbie", "endpoint_id": newbie_id, "owner": "Ada"}}),
         DiscoveryMode::Auto,
+        None,
     )
     .await
     .expect("approve_join");
@@ -192,6 +198,7 @@ async fn admin_rejects_bots_and_runtime_peer_connects() {
         "add_peer",
         json!({"endpoint_id": extra_id, "label": "extra"}),
         DiscoveryMode::Auto,
+        None,
     )
     .await
     .unwrap();
@@ -224,6 +231,7 @@ async fn admin_rejects_bots_and_runtime_peer_connects() {
         "remove_peer",
         json!({"endpoint_id": extra_id, "confirm": true}),
         DiscoveryMode::Auto,
+        None,
     )
     .await
     .unwrap();

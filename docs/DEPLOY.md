@@ -257,14 +257,21 @@ services.renews-iroh.instances.swarm = {
 
 The endpoint then neither uses the n0 relays nor publishes to n0 address lookup, and its ticket holds only that address. The address must exist when the unit starts; until it does, the unit fails and systemd restarts it.
 
-Give the address a name with a DNS-only A record (for example `swarm.example.com` pointing at the tailnet address; it is unreachable off the tailnet). Clients set `relays = false` (or pass `--no-relays`) and pin the server's endpoint id:
+Name the server with a DNS-only TXT record that holds its ticket. The ticket lists only the tailnet address, so the name resolves anywhere but answers only on the tailnet. Print the record from the instance's generated config:
+
+```bash
+renews --config "$(systemctl show -P ExecStart renews-iroh-swarm | grep -o '/nix/store/[^ ]*-renews-iroh-swarm.toml')" admin discovery-txt swarm.example.com --ticket
+```
+
+Clients set `relays = false` (or pass `--no-relays`) and pin the server's endpoint id:
 
 ```toml
-server = "<64 hex endpoint id>@swarm.example.com:1119"
+server = "swarm.example.com"
+server_id = "<64 hex endpoint id>"
 relays = false
 ```
 
-The A record supplies only the address. The id comes from the client config, so a changed DNS answer cannot hand the client another server. A bare endpoint id or an `id=` TXT record cannot be dialed without relays.
+With `server_id`, every answer must name that endpoint. A TXT answer naming another is skipped and not cached, and the next lookup (DNS-over-HTTPS, then the cached record) is tried, so a forged answer cannot hand the client another server. Without a TXT record, `server = "<64 hex endpoint id>@swarm.example.com:1119"` pins the id the same way and takes only the address from the host's A record. A bare endpoint id or an `id=` TXT record cannot be dialed without relays.
 
 ## Troubleshooting
 

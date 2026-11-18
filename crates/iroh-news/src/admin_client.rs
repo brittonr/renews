@@ -8,7 +8,7 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context as _, bail};
-use iroh::SecretKey;
+use iroh::{EndpointId, SecretKey};
 use serde_json::{Value, json};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
@@ -43,6 +43,7 @@ pub async fn join_request(
     owner: &str,
     note: &str,
     discovery: DiscoveryMode,
+    server_id: Option<EndpointId>,
 ) -> anyhow::Result<Value> {
     let response = framed_call(
         server,
@@ -52,6 +53,7 @@ pub async fn join_request(
         JOIN_ALPN,
         &json!({"name": name, "owner": owner, "note": note}),
         discovery,
+        server_id,
     )
     .await?;
     if response.get("status").and_then(Value::as_str) == Some("error") {
@@ -66,6 +68,7 @@ pub async fn join_request(
     Ok(response)
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn framed_call(
     server: &str,
     state_dir: &Path,
@@ -74,9 +77,10 @@ async fn framed_call(
     alpn: &[u8],
     body: &Value,
     discovery: DiscoveryMode,
+    server_id: Option<EndpointId>,
 ) -> anyhow::Result<Value> {
     let endpoint = crate::bind_client_endpoint(secret_key, relays).await?;
-    let addr = crate::dial_addr(server, state_dir, discovery, relays).await?;
+    let addr = crate::dial_addr(server, state_dir, discovery, relays, server_id).await?;
     let connection = endpoint
         .connect(addr, alpn)
         .await
@@ -101,6 +105,7 @@ async fn framed_call(
     response
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn admin_call(
     server: &str,
     state_dir: &Path,
@@ -109,9 +114,10 @@ pub async fn admin_call(
     op: &str,
     args: Value,
     discovery: DiscoveryMode,
+    server_id: Option<EndpointId>,
 ) -> anyhow::Result<Value> {
     let endpoint = crate::bind_client_endpoint(secret_key, relays).await?;
-    let addr = crate::dial_addr(server, state_dir, discovery, relays).await?;
+    let addr = crate::dial_addr(server, state_dir, discovery, relays, server_id).await?;
     let connection = endpoint
         .connect(addr, ADMIN_ALPN)
         .await

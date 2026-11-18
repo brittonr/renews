@@ -39,7 +39,9 @@ let
         default = defaultStateDirectory;
         description = ''
           systemd StateDirectory. The iroh secret key is `iroh.key` in this
-          directory and the SQLite databases live beside it.
+          directory, the running server writes its endpoint ticket to
+          `iroh.ticket` beside it (to publish as a `ticket=` TXT record), and
+          the SQLite databases live there too.
         '';
       };
 

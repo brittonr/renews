@@ -13,7 +13,7 @@ use std::task::{Context, Poll, ready};
 use anyhow::{Context as _, bail};
 use iroh::endpoint::{Connection, PortmapperConfig, RelayMode, presets};
 use iroh::protocol::Router;
-use iroh::{Endpoint, SecretKey};
+use iroh::{Endpoint, EndpointId, SecretKey};
 use nntp_client::NntpClient;
 use serde::Serialize;
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
@@ -61,14 +61,18 @@ pub(crate) async fn bind_client_endpoint(
 }
 
 /// Resolve `server` to the address to dial. Without relays nothing can look up
-/// a bare endpoint id, so the server must come with direct addresses.
+/// a bare endpoint id, so the server must come with direct addresses. With
+/// `server_id`, the address must be that endpoint's.
 pub(crate) async fn dial_addr(
     server: &str,
     state_dir: &Path,
     discovery: DiscoveryMode,
     relays: bool,
+    server_id: Option<EndpointId>,
 ) -> anyhow::Result<iroh::EndpointAddr> {
-    let addr = discover::discover(server, state_dir, discovery).await?.addr;
+    let addr = discover::discover(server, state_dir, discovery, server_id)
+        .await?
+        .addr;
     if !relays && addr.ip_addrs().next().is_none() {
         bail!(
             "{server} gives no direct address to dial without relays; use an endpoint \
@@ -81,7 +85,7 @@ pub(crate) async fn dial_addr(
 /// What a bot needs in order to dial and authenticate.
 #[derive(Clone)]
 pub struct Settings {
-    /// Endpoint ticket (`endpoint...`) or a bare endpoint id.
+    /// Endpoint ticket, endpoint id, DNS name, or `<endpoint id>@<host>:<port>`.
     pub server: String,
     pub username: String,
     pub password: String,
@@ -94,6 +98,8 @@ pub struct Settings {
     pub state_dir: PathBuf,
     /// How a DNS server name is resolved. Tickets and endpoint ids skip DNS.
     pub discovery: DiscoveryMode,
+    /// Pinned server endpoint id. Whatever `server` resolves to must carry it.
+    pub server_id: Option<EndpointId>,
 }
 
 /// A connected, authenticated NNTP session.
@@ -140,6 +146,7 @@ impl Session {
             &settings.state_dir,
             settings.discovery,
             settings.relays,
+            settings.server_id,
         )
         .await?;
         let connection = endpoint

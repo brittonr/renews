@@ -77,6 +77,7 @@ async fn allowed_bot_posts_and_reads_stranger_is_rejected() {
         relays: false,
         state_dir: state_dir.clone(),
         discovery: DiscoveryMode::Auto,
+        server_id: None,
     };
 
     let mut session = tokio::time::timeout(Duration::from_secs(30), Session::connect(settings))
@@ -127,6 +128,7 @@ async fn allowed_bot_posts_and_reads_stranger_is_rejected() {
         relays: false,
         state_dir: dir.path().join("stranger-state"),
         discovery: DiscoveryMode::Auto,
+        server_id: None,
     };
     let rejected = tokio::time::timeout(Duration::from_secs(20), Session::connect(stranger)).await;
     match rejected {

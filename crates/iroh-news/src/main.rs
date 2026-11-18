@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, bail};
 use clap::{Parser, Subcommand};
+use iroh::EndpointId;
 use iroh_news::credentials::{KEY_SECRET, PASSWORD_SECRET};
 use iroh_news::mcp::{McpConfig, serve};
 use iroh_news::{
@@ -36,7 +37,8 @@ struct Cli {
     no_relays: bool,
     /// Server ticket, endpoint id, DNS name such as slime.onix.computer, or
     /// `<endpoint id>@<host>:<port>` (the id is pinned; the host's A/AAAA
-    /// records give the addresses). Overrides the config and `IROH_NEWS_SERVER`.
+    /// records give the addresses). Overrides the config and `IROH_NEWS_SERVER`;
+    /// a `server_id` in the config still applies.
     #[arg(long, global = true)]
     server: Option<String>,
     /// How to resolve a DNS name: `auto` (system, then DNS-over-HTTPS, then
@@ -337,6 +339,11 @@ struct FileConfig {
     /// `--no-relays` does the same.
     #[serde(default)]
     relays: Option<bool>,
+    /// Pin the server's endpoint id. Whatever `server` resolves to (a ticket,
+    /// a pinned host, a `_iroh-news` TXT record, or the cached record) must
+    /// carry this id, or iroh-news refuses to connect.
+    #[serde(default)]
+    server_id: Option<String>,
 }
 
 fn credential_store(file: Option<&FileConfig>) -> anyhow::Result<CredentialStore> {
@@ -348,6 +355,16 @@ fn credential_store(file: Option<&FileConfig>) -> anyhow::Result<CredentialStore
 
 fn use_relays(cli: &Cli, file: Option<&FileConfig>) -> bool {
     !cli.no_relays && file.and_then(|cfg| cfg.relays).unwrap_or(true)
+}
+
+fn pinned_server_id(file: Option<&FileConfig>) -> anyhow::Result<Option<EndpointId>> {
+    file.and_then(|cfg| cfg.server_id.as_deref())
+        .map(|raw| {
+            raw.trim()
+                .parse()
+                .map_err(|err| anyhow::anyhow!("server_id {raw:?} is not an endpoint id: {err}"))
+        })
+        .transpose()
 }
 
 #[tokio::main]
@@ -559,6 +576,7 @@ async fn run() -> anyhow::Result<()> {
                     &owner_text,
                     &note,
                     discovery_mode(&cli, file.as_ref())?,
+                    pinned_server_id(file.as_ref())?,
                 )
                 .await?;
                 let status = response
@@ -619,6 +637,7 @@ async fn run() -> anyhow::Result<()> {
                     owner,
                     "",
                     discovery_mode(&cli, file.as_ref())?,
+                    pinned_server_id(file.as_ref())?,
                 )
                 .await
                 .unwrap_or_else(
@@ -674,6 +693,7 @@ async fn run() -> anyhow::Result<()> {
                 store,
                 admin,
                 discovery,
+                server_id: pinned_server_id(file.as_ref())?,
             })
             .await
         }
@@ -691,8 +711,9 @@ async fn run() -> anyhow::Result<()> {
             let secrets_dir = file.as_ref().and_then(|cfg| cfg.secrets_dir.clone());
             let (op_name, args) = admin_args(op).await?;
             let (secret_key, _) = store.secret_key(&state_dir)?;
+            let server_id = pinned_server_id(file.as_ref())?;
             let mut result = admin_call(
-                &server, &state_dir, secret_key, relays, &op_name, args, discovery,
+                &server, &state_dir, secret_key, relays, &op_name, args, discovery, server_id,
             )
             .await?;
             store.stash_account_password(
@@ -741,8 +762,13 @@ async fn run() -> anyhow::Result<()> {
                 .or_else(|| std::env::var("IROH_NEWS_SERVER").ok())
                 .or_else(|| file.as_ref().and_then(|cfg| cfg.server.clone()))
                 .unwrap_or_else(|| iroh_news::DEFAULT_JOIN_SERVER.to_string());
-            let resolved =
-                discover(&server, &state_dir, discovery_mode(&cli, file.as_ref())?).await?;
+            let resolved = discover(
+                &server,
+                &state_dir,
+                discovery_mode(&cli, file.as_ref())?,
+                pinned_server_id(file.as_ref())?,
+            )
+            .await?;
             let qname = match resolved.source {
                 iroh_news::DiscoverySource::Direct | iroh_news::DiscoverySource::Host => {
                     serde_json::Value::Null
@@ -804,6 +830,7 @@ fn load_settings(cli: &Cli, state_dir: &Path) -> anyhow::Result<Settings> {
         toml::from_str(&text).with_context(|| format!("parsing config {}", path.display()))?;
     let discovery = discovery_mode(cli, Some(&file))?;
     let relays = use_relays(cli, Some(&file));
+    let server_id = pinned_server_id(Some(&file))?;
     let store = credential_store(Some(&file))?;
     let username = std::env::var("IROH_NEWS_USERNAME")
         .ok()
@@ -839,6 +866,7 @@ fn load_settings(cli: &Cli, state_dir: &Path) -> anyhow::Result<Settings> {
         relays,
         state_dir: state_dir.to_path_buf(),
         discovery,
+        server_id,
     })
 }
 
