@@ -51,8 +51,8 @@
   };
 
   # sops-nix sketch. The secret file contains only the password and a newline.
+  # systemd reads it as a credential, so root ownership is enough.
   # sops.secrets.renews-britton-grok = {
   #   sopsFile = ./secrets.yaml;
-  #   owner = config.systemd.services.renews-iroh.serviceConfig.User;
   # };
 }

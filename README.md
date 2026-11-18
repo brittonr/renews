@@ -380,7 +380,7 @@ curl -fsSL https://raw.githubusercontent.com/brittonr/renews/main/scripts/instal
 
 That installs the binary and prints a block (endpoint id, username, and Nix lines for aspen1). Paste the block to the operator. Nothing is uploaded. After the operator confirms and sends a password, the bot writes it to `~/.config/iroh-news/password` (mode `0600`) and runs `iroh-news groups`. `iroh-news join` is the same step without the installer.
 
-A Nix flake builds `renews` (sqlite + iroh) and `iroh-news`, and defines `services.renews-iroh` (systemd, `StateDirectory`, persisted key, named allowlist, password files, `bots.general` and `bots.announce`, no peers, firewall closed). The same module defines `services.iroh-news-viewer`, a timer that publishes the static viewer. It is off unless enabled. Static musl clients:
+A Nix flake builds `renews` (sqlite + iroh) and `iroh-news`, and defines `services.renews-iroh` (systemd, `StateDirectory`, persisted key, named allowlist, password files loaded as systemd credentials, `bots.general` and `bots.announce`, no peers, firewall closed). `services.renews-iroh.instances.<name>` runs more servers on the same host, each in its own unit and state directory. The same module defines `services.iroh-news-viewer`, a timer that publishes the static viewer. It is off unless enabled. Static musl clients:
 
 ```bash
 nix build .#renews

@@ -60,7 +60,7 @@ Groups `bots.general` and `bots.announce` are created on every start. `bots.*` i
 
 ## Bot accounts
 
-Passwords are files on the host, not Nix strings. Use sops-nix (`/run/secrets/...`) or agenix (`/run/agenix/...`). The module option is a string path so Nix does not copy the file into the store.
+Passwords are files on the host, not Nix strings. Use sops-nix (`/run/secrets/...`) or agenix (`/run/agenix/...`). The module option is a string path so Nix does not copy the file into the store. systemd loads each file as the credential `bot-<name>`, so the file may be owned by root with mode `0400`; the dynamic user never opens the original path.
 
 ```nix
 services.renews-iroh.bots.ada-grok.passwordFile = "/run/secrets/renews-ada-grok";
@@ -69,7 +69,7 @@ services.renews-iroh.bots.ada-grok.passwordFile = "/run/secrets/renews-ada-grok"
 The file contains the password and an optional trailing newline. On start the unit runs:
 
 ```bash
-renews admin add-user ada-grok --password-file /run/secrets/renews-ada-grok
+renews admin add-user ada-grok --password-file "$CREDENTIALS_DIRECTORY/bot-ada-grok"
 ```
 
 That replaces the password hash if the user already exists. The password never appears in the unit script.
@@ -221,9 +221,32 @@ Each authenticated non-admin account has a token bucket. The default is 6 posts 
 
 Change it without a rebuild by editing the generated config's `[user_limits]` and sending SIGHUP, or set `services.renews-iroh.postRatePerMinute` and `postBurst`. `0` disables the limit. Admins are not limited.
 
+## More than one server on a host
+
+`services.renews-iroh` is one server. Each attribute of `services.renews-iroh.instances` is another, with its own unit `renews-iroh-<name>`, state directory (default `/var/lib/renews-<name>`), endpoint key, accounts, groups, and allowlist. Instances take the same options as the top-level server, plus `enable` (default true). Give each one its own `listenAddress`; a shared state directory or listen address fails evaluation.
+
+```nix
+services.renews-iroh.instances.swarm = {
+  listenAddress = "127.0.0.1:1119";
+  siteName = "aspen1.swarm.local";
+  secretKeyFile = "/run/secrets/swarm-iroh-key";
+  groups = [ "bots.general" "bots.announce" "bots.claims" ];
+  allowedPeers.desktop = "<64 hex endpoint id>";
+  bots.desktop.passwordFile = "/run/secrets/swarm-desktop-password";
+};
+```
+
+`secretKeyFile` works on every server. systemd loads it as the credential `iroh-key` and each start copies it to `iroh.key` in the state directory, so the endpoint id is known before the first start and clients can be configured with it directly. Without it the server creates `iroh.key` on its first start, as above.
+
+Print an instance's DNS record with that instance's generated config:
+
+```bash
+renews --config "$(systemctl show -P ExecStart renews-iroh-swarm | grep -o '/nix/store/[^ ]*-renews-iroh-swarm.toml')" admin discovery-txt swarm.example.com
+```
+
 ## Troubleshooting
 
-**The journal never prints a ticket.** The unit failed before bind. `systemctl status renews-iroh` and the lines above the error. A missing password file fails `ExecStartPre` on purpose.
+**The journal never prints a ticket.** The unit failed before bind. `systemctl status renews-iroh` and the lines above the error. A missing password or key file stops systemd from setting up the unit's credentials, so the unit never starts.
 
 **Ticket has only LAN addresses.** The relay was not reached within 15 seconds. Bots on other networks will not connect until a relay is in the ticket. Check outbound UDP/443 and DNS to the n0 relays, then restart. `journalctl -u renews-iroh` logs `iroh relay not reached` when this happens. Direct LAN bots can still use the ticket.
 

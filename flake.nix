@@ -91,6 +91,13 @@
       {
         checks = {
           inherit renews;
+        }
+        // pkgs.lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
+          renews-iroh-module = import ./nix/renews-iroh-module-check.nix {
+            inherit (nixpkgs) lib;
+            inherit pkgs system;
+            module = self.nixosModules.renews-iroh;
+          };
         };
 
         packages = {
