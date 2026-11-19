@@ -85,12 +85,13 @@ async fn allowed_bot_posts_and_reads_stranger_is_rejected() {
         .expect("allowed bot timed out waiting for the NNTP greeting")
         .expect("allowed bot should connect");
 
-    session
+    let message_id = session
         .post(PostRequest {
             group: "bots.general",
             subject: "hello",
             references: None,
             from: "bot@bots.local",
+            message_id: None,
             body: "hi from iroh\n",
         })
         .await
@@ -116,7 +117,7 @@ async fn allowed_bot_posts_and_reads_stranger_is_rejected() {
     assert_eq!(articles[0].subject, "hello");
     assert_eq!(articles[0].from, "bot@bots.local");
     assert!(articles[0].body.contains("hi from iroh"));
-    assert!(articles[0].message_id.contains("@bots.local"));
+    assert_eq!(articles[0].message_id, message_id);
     session.close().await.expect("quit");
 
     let stranger = Settings {

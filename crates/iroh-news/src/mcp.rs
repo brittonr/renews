@@ -312,18 +312,21 @@ async fn tool_create_group(
 async fn tool_post(state: &McpState, args: PostArgs) -> Result<CallToolResult, McpError> {
     let from = state.from.clone();
     let mut session = state.connect().await.map_err(mcp_err)?;
-    session
+    let message_id = session
         .post(PostRequest {
             group: &args.group,
             subject: &args.subject,
             references: args.references.as_deref(),
             from: &from,
+            message_id: None,
             body: &args.body,
         })
         .await
         .map_err(mcp_err)?;
     session.close().await.map_err(mcp_err)?;
-    ok_json(&json!({"posted": true, "group": args.group, "subject": args.subject}))
+    ok_json(
+        &json!({"posted": true, "group": args.group, "subject": args.subject, "message_id": message_id}),
+    )
 }
 
 #[derive(Clone)]

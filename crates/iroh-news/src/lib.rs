@@ -8,7 +8,9 @@
 use std::io;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::task::{Context, Poll, ready};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context as _, bail};
 use iroh::endpoint::{Connection, PortmapperConfig, RelayMode, presets};
@@ -129,6 +131,9 @@ pub struct PostRequest<'a> {
     pub subject: &'a str,
     pub references: Option<&'a str>,
     pub from: &'a str,
+    /// `Message-ID` to send, `<...>` included. `None` makes [`Session::post`]
+    /// generate one and return it.
+    pub message_id: Option<&'a str>,
     pub body: &'a str,
 }
 
@@ -249,18 +254,28 @@ impl Session {
 
     /// `POST` an article. The body is dot-stuffed.
     ///
+    /// Returns the article's `Message-ID`, `<...>` included: the one in
+    /// `request.message_id`, or a generated one. Callers need it to reference
+    /// the article in a later post without reading the group back.
+    ///
     /// # Errors
     ///
     /// Returns an error if a header contains a newline or the server rejects the article.
-    pub async fn post(&mut self, request: PostRequest<'_>) -> anyhow::Result<()> {
+    pub async fn post(&mut self, request: PostRequest<'_>) -> anyhow::Result<String> {
+        let message_id = match request.message_id {
+            Some(id) => id.to_string(),
+            None => new_message_id(request.from),
+        };
         let raw = format_article(
             request.from,
             request.group,
             request.subject,
             request.references,
+            Some(&message_id),
             request.body,
         )?;
-        self.client.post(&raw).await
+        self.client.post(&raw).await?;
+        Ok(message_id)
     }
 
     /// Article number last consumed by `--new` / `watch` for `group`.
@@ -292,11 +307,40 @@ impl Session {
 /// # Errors
 ///
 /// Returns an error if a header value contains CR or LF.
+/// A fresh `<...>` `Message-ID` for a post that names none.
+///
+/// The right-hand side is the domain of `from` when it has one, so a swarm
+/// article reads `<...@swarm.local>` like the server's own ids do. The
+/// counter separates posts that land in the same nanosecond.
+pub fn new_message_id(from: &str) -> String {
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_nanos())
+        .unwrap_or(0);
+    let seq = COUNTER.fetch_add(1, Ordering::Relaxed);
+    let domain = from
+        .rsplit_once('@')
+        .map(|(_, rest)| rest.trim_end_matches('>'))
+        .filter(|domain| !domain.is_empty() && !domain.contains([' ', '<', '>']))
+        .unwrap_or("iroh-news.local");
+    format!("<{nanos:x}.{}.{seq:x}@{domain}>", std::process::id())
+}
+
+fn message_id_is_bracketed(id: &str) -> anyhow::Result<()> {
+    let inner = id.strip_prefix('<').and_then(|rest| rest.strip_suffix('>'));
+    match inner {
+        Some(inner) if !inner.is_empty() && !inner.contains(['<', '>', ' ']) => Ok(()),
+        _ => bail!("Message-ID must be <id@domain> without spaces"),
+    }
+}
+
 pub fn format_article(
     from: &str,
     group: &str,
     subject: &str,
     references: Option<&str>,
+    message_id: Option<&str>,
     body: &str,
 ) -> anyhow::Result<String> {
     for (name, value) in [("From", from), ("Newsgroups", group), ("Subject", subject)] {
@@ -304,16 +348,22 @@ pub fn format_article(
             bail!("{name} contains a newline");
         }
     }
-    if let Some(references) = references
-        && references.contains(['\r', '\n'])
-    {
-        bail!("References contains a newline");
+    for value in [references, message_id].into_iter().flatten() {
+        if value.contains(['\r', '\n']) {
+            bail!("References or Message-ID contains a newline");
+        }
+    }
+    if let Some(message_id) = message_id {
+        message_id_is_bracketed(message_id)?;
     }
 
     let mut out = String::new();
     out.push_str(&format!("From: {from}\r\n"));
     out.push_str(&format!("Newsgroups: {group}\r\n"));
     out.push_str(&format!("Subject: {subject}\r\n"));
+    if let Some(message_id) = message_id {
+        out.push_str(&format!("Message-ID: {message_id}\r\n"));
+    }
     if let Some(references) = references {
         out.push_str(&format!("References: {references}\r\n"));
     }
@@ -778,12 +828,28 @@ mod tests {
             "bots.general",
             "hello",
             Some("<root@bots.local>"),
+            Some("<1.2@bots.local>"),
             "line\n.dot\n",
         )
         .unwrap();
         assert!(raw.contains("From: bot@bots.local\r\n"));
+        assert!(raw.contains("Message-ID: <1.2@bots.local>\r\n"));
         assert!(raw.contains("References: <root@bots.local>\r\n"));
         assert!(raw.contains("\r\nline\r\n..dot\r\n.\r\n"));
+
+        let bad = format_article(
+            "bot@bots.local",
+            "bots.general",
+            "hello",
+            None,
+            Some("not-bracketed"),
+            "x\n",
+        );
+        assert!(bad.is_err());
+
+        let id = new_message_id("bot <bot@swarm.local>");
+        assert!(id.starts_with('<') && id.ends_with("@swarm.local>"), "{id}");
+        assert_ne!(id, new_message_id("bot <bot@swarm.local>"));
     }
 
     #[test]

@@ -533,12 +533,13 @@ async fn run() -> anyhow::Result<()> {
             let mut body = String::new();
             tokio::io::AsyncReadExt::read_to_string(&mut tokio::io::stdin(), &mut body).await?;
             let mut session = Session::connect(settings).await?;
-            session
+            let message_id = session
                 .post(PostRequest {
                     group: group.as_str(),
                     subject: subject.as_str(),
                     references: references.as_deref(),
                     from: &from,
+                    message_id: None,
                     body: &body,
                 })
                 .await?;
@@ -547,6 +548,7 @@ async fn run() -> anyhow::Result<()> {
                 "posted": true,
                 "group": group,
                 "subject": subject,
+                "message_id": message_id,
             }))?;
             Ok(())
         }

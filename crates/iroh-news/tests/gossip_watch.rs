@@ -158,6 +158,7 @@ async fn watch_hears_a_post_ignores_a_spoof_and_rejects_a_stranger() {
             subject: "live",
             references: None,
             from: "bot@bots.local",
+            message_id: None,
             body: "via gossip\n",
         })
         .await
