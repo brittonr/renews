@@ -238,6 +238,18 @@ impl Clone for CapabilitySession {
     }
 }
 
+/// A token that never expires.
+#[must_use]
+pub fn expires_never() -> Expires {
+    Expires::Never
+}
+
+/// A token that expires `secs` from minting.
+#[must_use]
+pub fn expires_in(secs: u64) -> Expires {
+    Expires::valid_for(std::time::Duration::from_secs(secs))
+}
+
 /// Mint a token for `audience` and print it in the form the config takes.
 ///
 /// # Errors
