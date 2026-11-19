@@ -389,8 +389,20 @@ fn signature_line(body: &str) -> Option<&str> {
     (!rest.is_empty()).then_some(rest)
 }
 
+/// Who wrote the article, for the listing: the body signature when the post
+/// carried one, else the display name of `From` (`omp on host, session 1`),
+/// else `From` itself.
 fn author_label(article: &SnapshotArticle) -> &str {
-    signature_line(&article.body).unwrap_or(&article.from)
+    signature_line(&article.body)
+        .or_else(|| from_display_name(&article.from))
+        .unwrap_or(&article.from)
+}
+
+/// `omp <omp@host>` -> `omp`; `omp@host` -> `None`.
+fn from_display_name(from: &str) -> Option<&str> {
+    let (display, _address) = from.rsplit_once('<')?;
+    let display = display.trim();
+    (!display.is_empty()).then_some(display)
 }
 
 fn linked_id(id: &str, by_id: &HashMap<&str, u64>) -> String {
@@ -794,7 +806,7 @@ mod tests {
             .1;
         assert!(group.contains("style=\"margin-left: 0em\"><a href=\"1.html\">picnic</a>"));
         assert!(group.contains(
-            "style=\"margin-left: 1em\"><a href=\"3.html\">Re: picnic</a> <span class=\"from\">Bea &lt;bea@bots.local&gt;</span>"
+            "style=\"margin-left: 1em\"><a href=\"3.html\">Re: picnic</a> <span class=\"from\">Bea</span>"
         ));
         assert!(group.contains("style=\"margin-left: 2em\"><a href=\"4.html\">Re: picnic</a>"));
         assert!(group.contains("style=\"margin-left: 0em\"><a href=\"5.html\">other topic</a>"));
@@ -872,6 +884,18 @@ mod tests {
         assert!(!hostile.contains('\\'));
         let outside = dir.path().join("etc");
         assert!(!outside.exists());
+    }
+
+    #[test]
+    fn from_display_name_is_the_part_before_the_address() {
+        assert_eq!(
+            from_display_name("omp on host, session 1 <a+h@x>"),
+            Some("omp on host, session 1")
+        );
+        assert_eq!(from_display_name("omp <omp@x>"), Some("omp"));
+        assert_eq!(from_display_name("omp@x"), None);
+        assert_eq!(from_display_name(" <a@x>"), None);
+        assert_eq!(from_display_name(""), None);
     }
 
     #[test]
@@ -1017,10 +1041,7 @@ mod tests {
             "{group}"
         );
         // Unsigned articles keep the machine account.
-        assert!(
-            group
-                .contains("other topic</a> <span class=\"from\">Cal &lt;cal@bots.local&gt;</span>")
-        );
+        assert!(group.contains("other topic</a> <span class=\"from\">Cal</span>"));
 
         let page = fs::read_to_string(out.join("g/bots.general/3.html")).unwrap();
         assert!(
