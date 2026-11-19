@@ -69,6 +69,12 @@ only and each needs its own change.
    (`SWARM_SESSION`) and would retire the password files bots use now. Keep
    `AUTHINFO` as the fallback for standard clients.
 
+  Integration: `src/auth` holds the issuer list and verifier; `src/iroh.rs`
+  maps a verified endpoint id to capabilities before handing the connection to
+  `handle_client_key`; `src/session.rs` carries the per-group scopes that
+  `handlers/{group,post,article,overview}.rs` check. AUTHINFO stays the path for
+  standard clients.
+
 6. **Peer sync by range-based set reconciliation.** `src/peers.rs` is classic
    NNTP: cron, last-sync timestamps, overview scans, IHAVE/TAKETHIS over
    TCP/TLS. That is linear in the history for a group that has been quiet, and
@@ -80,6 +86,11 @@ only and each needs its own change.
    rather than taking iroh-docs, which pins blobs 0.103 and duplicates storage.
    `patchbay` namespaces make the partition and latency tests real.
 
+  Integration: a new `src/sync.rs` with an `/onix/sync/1` ALPN, hashed
+  message-ids per group, and bisection over hash prefixes; `src/peers.rs` keeps
+  the cron entry but, in reconcile mode, learns what is missing and fetches it
+  through the existing IHAVE path so storage stays one implementation.
+
 7. **Article attachments as blobs.** Newsgroups with binaries do not fit SQLite
    rows. `iroh-blobs` gives BLAKE3-verified, ranged transfer of large payloads:
    post a text stub with `X-Content-Hash: <hash>`, keep legacy clients on a
@@ -87,10 +98,19 @@ only and each needs its own change.
    the 0.10x line to leave "not production quality", or vendor the store
    interface behind a feature flag so the storage choice stays free.
 
+  Integration: a `blob` table beside `messages`, `X-Content-Hash` on the
+  article, a `/onix/blob/1` ALPN serving ranges from the blob directory, and
+  `iroh-news blob get`. Feature-gate the transfer so the store choice can move
+  to `iroh-blobs` when its 0.10x line stabilises.
+
 8. **`irpc` for the admin channel.** The admin surface is a bespoke JSON
    protocol; `irpc` 1.0 gives versioned, streaming RPC over the same endpoint
    and removes the hand-rolled framing. The MCP server can keep speaking its own
    protocol on top.
+
+  Integration: replace the length-prefixed JSON frames in `src/admin.rs` and
+  `crates/iroh-news/src/admin_client.rs` with an `irpc` service definition shared
+  by both; the MCP server keeps its own tool schema on top.
 
 ## Later or not at all
 
