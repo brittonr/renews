@@ -460,7 +460,17 @@ impl Server {
     /// Start the iroh listener when `[iroh] enabled` is set.
     #[cfg(feature = "iroh")]
     async fn start_iroh_listener(&self) -> ServerResult<Option<crate::iroh::IrohServer>> {
-        let (enabled, key_path, allowed_peers, bind_addr, relays, wait_for_relay, relay_urls) = {
+        let (
+            enabled,
+            key_path,
+            allowed_peers,
+            bind_addr,
+            relays,
+            wait_for_relay,
+            relay_urls,
+            capability_issuers,
+            capability_tokens,
+        ) = {
             let cfg = self.components.config.read().await;
             (
                 cfg.iroh.enabled,
@@ -470,6 +480,8 @@ impl Server {
                 cfg.iroh.relays,
                 cfg.iroh.wait_for_relay,
                 cfg.iroh.relay_urls.clone(),
+                cfg.iroh.capability_issuers.clone(),
+                cfg.iroh.capability_tokens.clone(),
             )
         };
         if !enabled {
@@ -508,6 +520,8 @@ impl Server {
                     &key_path,
                 ))),
                 runtime_db: crate::admin::runtime_db_uri(std::path::Path::new(&key_path)),
+                capability_issuers,
+                capability_tokens,
             },
         )
         .await?;

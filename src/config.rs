@@ -133,6 +133,17 @@ pub struct IrohConfig {
     #[serde(default)]
     pub relay_urls: Vec<String>,
 
+    /// Ed25519 public keys (64 lowercase hex) whose capability tokens are
+    /// honoured. Required before any `capability_tokens` entry is accepted.
+    #[serde(default)]
+    pub capability_issuers: Vec<String>,
+
+    /// Capability tokens from `renews admin issue-capability`, base64. A
+    /// token admits its audience endpoint without an account and grants only
+    /// the read and post patterns it names, until it expires.
+    #[serde(default)]
+    pub capability_tokens: Vec<String>,
+
     /// Unauthenticated join requests. Off unless explicitly enabled.
     #[serde(default)]
     pub join_requests: JoinRequestsConfig,
@@ -218,6 +229,8 @@ impl Default for IrohConfig {
             relays: true,
             wait_for_relay: true,
             relay_urls: Vec::new(),
+            capability_issuers: Vec::new(),
+            capability_tokens: Vec::new(),
             join_requests: JoinRequestsConfig::default(),
             gossip: GossipConfig::default(),
         }

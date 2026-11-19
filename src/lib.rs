@@ -7,6 +7,8 @@ pub use parse::{
 #[cfg(feature = "iroh")]
 pub mod admin;
 pub mod auth;
+#[cfg(feature = "iroh")]
+pub mod capabilities;
 pub mod config;
 pub mod control;
 pub mod error;
@@ -71,6 +73,8 @@ pub struct KeyAuth {
     /// Set when this endpoint is already bound to an account.
     pub username: Option<String>,
     pub bindings: std::sync::Arc<dyn crate::identity::UserEndpoint>,
+    /// A capability token for this endpoint, if one was configured.
+    pub capability: Option<std::sync::Arc<crate::capabilities::CapabilitySession>>,
 }
 
 pub async fn handle_client<S>(
@@ -140,6 +144,9 @@ where
     let mut session = Session::new(is_tls, allow_auth_insecure, allow_anonymous_posting);
     if let Some(key) = key_auth {
         session.set_peer(key.endpoint_id, key.bindings);
+        if let Some(capability) = key.capability {
+            session.set_policy(capability);
+        }
         if let Some(username) = key.username {
             let is_admin = auth.is_admin(&username).await.unwrap_or(false);
             session.authenticate_with_admin(username, is_admin);

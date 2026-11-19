@@ -1,8 +1,8 @@
 //! Streaming command handlers (IHAVE, CHECK, TAKETHIS).
 
 use super::utils::{
-    check_bandwidth_rejected, comprehensive_validate_article, read_message, record_bandwidth_usage,
-    write_simple,
+    check_bandwidth_rejected, comprehensive_validate_article, may_post_article, read_message,
+    record_bandwidth_usage, write_simple,
 };
 use super::{CommandHandler, HandlerContext, HandlerResult};
 use crate::responses::*;
@@ -30,6 +30,12 @@ impl CommandHandler for IHaveHandler {
                 write_simple(&mut ctx.writer, RESP_437_REJECTED).await?;
                 return Ok(());
             };
+
+            if !may_post_article(&ctx.session, &article) {
+                Span::current().record("outcome", "rejected_capability");
+                write_simple(&mut ctx.writer, RESP_437_REJECTED).await?;
+                return Ok(());
+            }
 
             // Check if this is a control message first
             let is_control = control::is_control_message(&article);
@@ -157,6 +163,12 @@ impl CommandHandler for TakeThisHandler {
             }
 
             // Check if this is a control message first
+            if !may_post_article(&ctx.session, &article) {
+                Span::current().record("outcome", "rejected_capability");
+                write_simple(&mut ctx.writer, &streaming_response(439, id)).await?;
+                return Ok(());
+            }
+
             let is_control = control::is_control_message(&article);
             Span::current().record("is_control", is_control);
 

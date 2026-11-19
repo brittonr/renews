@@ -17,6 +17,12 @@ impl CommandHandler for GroupHandler {
         if let Some(group_name) = args.first() {
             Span::current().record("group", group_name.as_str());
 
+            if !ctx.session.may_read(group_name) {
+                Span::current().record("outcome", "not_permitted");
+                write_simple(&mut ctx.writer, RESP_411_NO_SUCH_GROUP).await?;
+                return Ok(());
+            }
+
             // Check if the group exists using the storage interface
             if !ctx.storage.group_exists(group_name).await? {
                 let err = StorageError::GroupNotFound(group_name.clone());
@@ -103,6 +109,10 @@ impl CommandHandler for ListGroupHandler {
             write_simple(&mut ctx.writer, RESP_412_NO_GROUP).await?;
             return Ok(());
         };
+        if !ctx.session.may_read(&group_name) {
+            write_simple(&mut ctx.writer, RESP_411_NO_SUCH_GROUP).await?;
+            return Ok(());
+        }
 
         write_simple(&mut ctx.writer, RESP_211_LISTGROUP).await?;
         let mut stream = ctx.storage.list_article_numbers(&group_name);
@@ -165,6 +175,9 @@ impl CommandHandler for NewGroupsHandler {
         let mut stream = ctx.storage.list_groups_since(since);
         while let Some(result) = stream.next().await {
             let group = result?;
+            if !ctx.session.may_read(&group) {
+                continue;
+            }
             ctx.writer.write_all(group.as_bytes()).await?;
             ctx.writer.write_all(b"\r\n").await?;
         }
@@ -205,7 +218,7 @@ impl CommandHandler for NewNewsHandler {
         let mut groups_stream = ctx.storage.list_groups();
         while let Some(result) = groups_stream.next().await {
             let group = result?;
-            if wildmat::wildmat(&group, wildmat_pattern) {
+            if ctx.session.may_read(&group) && wildmat::wildmat(&group, wildmat_pattern) {
                 let mut articles_stream = ctx.storage.list_article_ids_since(&group, since);
                 while let Some(article_result) = articles_stream.next().await {
                     let article_id = article_result?;
@@ -227,6 +240,9 @@ async fn handle_list_active(ctx: &mut HandlerContext, pattern: Option<&String>) 
     let mut groups_stream = ctx.storage.list_groups();
     while let Some(result) = groups_stream.next().await {
         let group = result?;
+        if !ctx.session.may_read(&group) {
+            continue;
+        }
         if let Some(pat) = pattern
             && !wildmat::wildmat(&group, pat)
         {
@@ -266,6 +282,9 @@ async fn handle_list_bot_groups(ctx: &mut HandlerContext) -> HandlerResult {
         .write_all(RESP_215_INFO_FOLLOWS.as_bytes())
         .await?;
     for row in catalog {
+        if !ctx.session.may_read(&row.name) {
+            continue;
+        }
         let line = format!(
             "{}\t{}\t{}\t{}\r\n",
             row.name, row.description, row.creator, row.created_at
@@ -369,6 +388,9 @@ async fn handle_list_newsgroups(ctx: &mut HandlerContext) -> HandlerResult {
     let mut groups_stream = ctx.storage.list_groups_with_descriptions();
     while let Some(result) = groups_stream.next().await {
         let (group, description) = result?;
+        if !ctx.session.may_read(&group) {
+            continue;
+        }
         ctx.writer
             .write_all(format!("{group} {description}\r\n").as_bytes())
             .await?;
@@ -382,6 +404,9 @@ async fn handle_list_active_times(ctx: &mut HandlerContext) -> HandlerResult {
     let mut stream = ctx.storage.list_groups_with_times();
     while let Some(result) = stream.next().await {
         let (group, time) = result?;
+        if !ctx.session.may_read(&group) {
+            continue;
+        }
         ctx.writer
             .write_all(format!("{group} {time} -\r\n").as_bytes())
             .await?;

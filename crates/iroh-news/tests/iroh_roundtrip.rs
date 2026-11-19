@@ -62,6 +62,8 @@ async fn allowed_bot_posts_and_reads_stranger_is_rejected() {
             bind_addr: Some("127.0.0.1:0".parse().unwrap()),
             ticket_path: None,
             runtime_db: format!("sqlite://{}", dir.path().join("runtime.db").display()),
+            capability_issuers: Vec::new(),
+            capability_tokens: Vec::new(),
         },
     )
     .await

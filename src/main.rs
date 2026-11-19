@@ -31,6 +31,33 @@ enum Command {
 
 #[derive(Subcommand)]
 enum AdminCommand {
+    /// Generate an ed25519 key for issuing capability tokens
+    #[cfg(feature = "iroh")]
+    GenerateCapabilityKey {
+        /// Write the 64-hex private key here (created 0600). The public key
+        /// goes in `[iroh] capability_issuers`.
+        #[arg(long)]
+        out: std::path::PathBuf,
+    },
+    /// Mint a capability token for an iroh endpoint
+    #[cfg(feature = "iroh")]
+    IssueCapability {
+        /// File holding the issuer's 64-hex private key
+        #[arg(long)]
+        issuer_key: std::path::PathBuf,
+        /// Audience endpoint id, 64 lowercase hex
+        #[arg(long)]
+        audience: String,
+        /// Wildmat pattern the peer may read. Repeatable.
+        #[arg(long = "read")]
+        read: Vec<String>,
+        /// Wildmat pattern the peer may post to. Repeatable.
+        #[arg(long = "post")]
+        post: Vec<String>,
+        /// Lifetime, such as `30d`, `12h`, or `never`
+        #[arg(long, default_value = "30d")]
+        expires: String,
+    },
     /// Add newsgroups
     AddGroup {
         /// First group name
@@ -263,6 +290,69 @@ async fn run_admin(cmd: AdminCommand, cfg: &Config) -> Result<()> {
     let storage = storage::open(&cfg.db_path).await?;
     let auth = auth::open(&cfg.auth_db_path).await?;
     match cmd {
+        #[cfg(feature = "iroh")]
+        AdminCommand::GenerateCapabilityKey { out } => {
+            use std::io::Write as _;
+            use std::os::unix::fs::OpenOptionsExt as _;
+
+            let secret: [u8; 32] = rand::random();
+            let signing = renews::capabilities::signing_key_from_hex(
+                &renews::capabilities::encode_hex(&secret),
+            )?;
+            let public = renews::capabilities::encode_hex(
+                &ed25519_dalek::SigningKey::verifying_key(&signing).to_bytes(),
+            );
+            let mut file = std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .mode(0o600)
+                .open(&out)?;
+            writeln!(file, "{}", renews::capabilities::encode_hex(&secret))?;
+            println!("issuer key written to {}", out.display());
+            println!("add to [iroh] capability_issuers: {public}");
+        }
+        #[cfg(feature = "iroh")]
+        AdminCommand::IssueCapability {
+            issuer_key,
+            audience,
+            read,
+            post,
+            expires,
+        } => {
+            use rcan::Expires;
+            use renews::capabilities::{Grant, encode_hex, mint, signing_key_from_hex};
+
+            let text = std::fs::read_to_string(&issuer_key)?;
+            let signing = signing_key_from_hex(text.trim())?;
+            let audience: [u8; 32] = {
+                let bytes: Vec<u8> = (0..audience.len() / 2)
+                    .map(|i| u8::from_str_radix(&audience[2 * i..2 * i + 2], 16))
+                    .collect::<std::result::Result<_, _>>()
+                    .map_err(|_| anyhow::anyhow!("--audience must be 64 hex characters"))?;
+                bytes
+                    .try_into()
+                    .map_err(|_| anyhow::anyhow!("--audience must be 64 hex characters"))?
+            };
+            let audience = renews::capabilities::endpoint_from_bytes(&audience)?;
+            let expires = if expires.eq_ignore_ascii_case("never") {
+                Expires::Never
+            } else {
+                let secs = parse_duration_secs(&expires).ok_or_else(|| {
+                    anyhow::anyhow!("--expires must be `never` or a duration such as 30d")
+                })?;
+                Expires::valid_for(std::time::Duration::from_secs(secs))
+            };
+            let grant = Grant { read, post };
+            let expires_label = expires.to_string();
+            let token = mint(&signing, audience, grant, expires)?;
+            let payload = serde_json::json!({
+                "token": token,
+                "audience": audience.to_string(),
+                "issuer": encode_hex(&ed25519_dalek::SigningKey::verifying_key(&signing).to_bytes()),
+                "expires": expires_label,
+            });
+            println!("{payload}");
+        }
         AdminCommand::AddGroup { group, groups } => {
             // Add the first group
             storage.add_group(&group, false).await?;

@@ -85,6 +85,8 @@ async fn admin_rejects_bots_and_runtime_peer_connects() {
             bind_addr: Some("127.0.0.1:0".parse().unwrap()),
             ticket_path: None,
             runtime_db: format!("sqlite://{}", dir.path().join("runtime.db").display()),
+            capability_issuers: Vec::new(),
+            capability_tokens: Vec::new(),
         },
     )
     .await

@@ -28,6 +28,38 @@ pub fn has_header(article: &Message, header_name: &str) -> bool {
 
 /// Get header value from an article (case-insensitive).
 /// Returns the first matching header value.
+/// Does this connection's capability policy allow reading this article?
+///
+/// Accounts and clients without a policy keep the old rules. A capability
+/// session may read an article when any `Newsgroups` entry matches.
+pub fn may_read_article(session: &Session, article: &Message) -> bool {
+    if session.is_authenticated() || session.policy().is_none() {
+        return true;
+    }
+    get_header_value(article, "Newsgroups").is_some_and(|value| {
+        value
+            .split(',')
+            .map(str::trim)
+            .filter(|group| !group.is_empty())
+            .any(|group| session.may_read(group))
+    })
+}
+
+/// Every `Newsgroups` entry must be permitted for posting on this connection.
+pub fn may_post_article(session: &Session, message: &Message) -> bool {
+    if session.is_authenticated() || session.policy().is_none() {
+        return true;
+    }
+    get_header_value(message, "Newsgroups").is_some_and(|value| {
+        let groups: Vec<&str> = value
+            .split(',')
+            .map(str::trim)
+            .filter(|group| !group.is_empty())
+            .collect();
+        !groups.is_empty() && groups.iter().all(|group| session.may_post(group))
+    })
+}
+
 pub fn get_header_value(msg: &Message, name: &str) -> Option<String> {
     msg.headers
         .iter()
@@ -150,6 +182,9 @@ pub async fn resolve_articles(
                 .await
                 .map_err(|_| ArticleQueryError::MessageIdNotFound)?
             {
+                if !may_read_article(session, &article) {
+                    return Err(ArticleQueryError::MessageIdNotFound);
+                }
                 articles.push((0, article));
             } else {
                 return Err(ArticleQueryError::MessageIdNotFound);
@@ -170,6 +205,9 @@ pub async fn resolve_articles(
                     .await
                     .map_err(|_| ArticleQueryError::NotFoundByNumber)?
                 {
+                    if !may_read_article(session, &article) {
+                        continue;
+                    }
                     articles.push((n, article));
                     session.set_current_article(n);
                 }
@@ -190,6 +228,9 @@ pub async fn resolve_articles(
             .await
             .map_err(|_| ArticleQueryError::NoCurrentArticle)?
         {
+            if !may_read_article(session, &article) {
+                return Err(ArticleQueryError::NoCurrentArticle);
+            }
             articles.push((num, article));
         } else {
             return Err(ArticleQueryError::NoCurrentArticle);

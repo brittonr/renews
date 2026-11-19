@@ -7,6 +7,15 @@ use uuid::Uuid;
 use crate::identity::UserEndpoint;
 
 /// Encapsulated session state for a client connection
+/// Per-group read and post policy for a connection, implemented by
+/// capability tokens and by tests.
+pub trait ReadPostPolicy: Send + Sync {
+    fn can_read(&self, group: &str) -> bool;
+    fn can_post(&self, group: &str) -> bool;
+    /// Short human label for logs, without the token.
+    fn label(&self) -> String;
+}
+
 pub struct Session {
     session_id: Uuid,
     current_group: Option<String>,
@@ -20,6 +29,7 @@ pub struct Session {
     is_admin: bool,
     peer_endpoint: Option<String>,
     bindings: Option<Arc<dyn UserEndpoint>>,
+    policy: Option<Arc<dyn ReadPostPolicy>>,
 }
 
 impl Session {
@@ -37,7 +47,38 @@ impl Session {
             is_admin: false,
             peer_endpoint: None,
             bindings: None,
+            policy: None,
         }
+    }
+
+    /// Attach the connection's capability policy, if any.
+    pub fn set_policy(&mut self, policy: Arc<dyn ReadPostPolicy>) {
+        self.policy = Some(policy);
+    }
+
+    pub fn policy(&self) -> Option<&Arc<dyn ReadPostPolicy>> {
+        self.policy.as_ref()
+    }
+
+    /// May this connection read `group`?
+    ///
+    /// An account session and a plain unauthenticated client keep the old
+    /// rules; a capability session is limited to its patterns.
+    pub fn may_read(&self, group: &str) -> bool {
+        match (&self.policy, self.authenticated) {
+            (Some(policy), false) => policy.can_read(group),
+            _ => true,
+        }
+    }
+
+    /// May this connection post to `group`?
+    pub fn may_post(&self, group: &str) -> bool {
+        if self.authenticated || self.allow_anonymous_posting {
+            return true;
+        }
+        self.policy
+            .as_ref()
+            .is_some_and(|policy| policy.can_post(group))
     }
 
     /// Remember the iroh peer and where to check key-bound accounts.
@@ -131,7 +172,7 @@ impl Session {
     /// Check if the session can currently post articles.
     /// Requires either authentication or anonymous posting to be enabled.
     pub fn can_post(&self) -> bool {
-        self.authenticated || self.allow_anonymous_posting
+        self.authenticated || self.allow_anonymous_posting || self.policy.is_some()
     }
 
     pub fn is_tls(&self) -> bool {

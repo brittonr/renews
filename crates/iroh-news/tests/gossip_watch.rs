@@ -71,6 +71,8 @@ async fn watch_hears_a_post_ignores_a_spoof_and_rejects_a_stranger() {
             bind_addr: Some("127.0.0.1:0".parse().unwrap()),
             ticket_path: None,
             runtime_db: format!("sqlite://{}", dir.path().join("runtime.db").display()),
+            capability_issuers: Vec::new(),
+            capability_tokens: Vec::new(),
         },
     )
     .await

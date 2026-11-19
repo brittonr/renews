@@ -4726,6 +4726,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "rcan"
+version = "0.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "24c2990cfe6fc2f9a033be6689566d53e926b0ff41597426f807d2b9e55d7fdf"
+dependencies = [
+ "anyhow",
+ "derive_more",
+ "ed25519-dalek 3.0.0",
+ "hex",
+ "n0-future",
+ "postcard",
+ "serde",
+ "serdect 0.4.3",
+]
+
+[[package]]
 name = "rcgen"
 version = "0.14.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4824,6 +4840,7 @@ dependencies = [
  "chrono",
  "clap",
  "dashmap",
+ "ed25519-dalek 3.0.0",
  "flume",
  "futures-core",
  "futures-util",
@@ -4835,6 +4852,7 @@ dependencies = [
  "pgp-lib",
  "rand 0.8.8",
  "rand_core 0.6.4",
+ "rcan",
  "rcgen",
  "regex",
  "rustls-native-certs 0.6.3",

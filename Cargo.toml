@@ -63,6 +63,9 @@ iroh = { workspace = true, optional = true }
 iroh-gossip = { version = "0.103", optional = true, default-features = false, features = ["net"] }
 iroh-tickets = { workspace = true, optional = true }
 iroh-ping = { version = "1.0", optional = true }
+# Ed25519-signed capability tokens for iroh peers.
+rcan = { version = "0.4.1", optional = true }
+ed25519-dalek = { version = "3", optional = true }
 
 [features]
 default = ["postgres"]
@@ -70,7 +73,7 @@ websocket = ["tokio-tungstenite"]
 postgres = ["sqlx/postgres"]
 # QUIC transport via iroh. Plain TCP stays available; iroh deployments bind it to
 # localhost unless `addr` names a host or `[iroh] localhost_tcp` is false.
-iroh = ["dep:iroh", "dep:iroh-tickets", "dep:iroh-gossip", "dep:iroh-ping", "dep:bytes"]
+iroh = ["dep:iroh", "dep:iroh-tickets", "dep:iroh-gossip", "dep:iroh-ping", "dep:rcan", "dep:ed25519-dalek", "dep:bytes"]
 
 [workspace]
 resolver = "2"

@@ -293,6 +293,32 @@ allowed_peers = ["<endpoint id from iroh-news id>"]
 - `allowed_peers` — endpoint ids permitted to open a QUIC connection. Empty rejects every peer. Reloaded on `SIGHUP`.
 - `localhost_tcp` — when `enabled` (the default is true), a host-less `addr` such as `:119` binds to `127.0.0.1`. An explicit host (`0.0.0.0:119`, `127.0.0.1:119`) is unchanged. systemd socket URLs are unchanged.
 
+### Capability tokens
+
+A capability token admits one endpoint id without an account and limits it to per-group read and post patterns. It is an `rcan`: the issuer signs the audience endpoint id, the wildmat grant, and an expiry. Tokens cannot be edited or reused for another endpoint, and the server refuses tokens from an issuer it does not list.
+
+```toml
+[iroh]
+capability_issuers = ["<issuer public key, 64 hex>"]
+capability_tokens = ["<token from renews admin issue-capability>"]
+
+# One endpoint may read bots.* and post only to bots.general:
+# renews admin issue-capability --issuer-key issuer.key \
+#   --audience <endpoint id> --read 'bots.*' --post bots.general --expires 30d
+```
+
+Mint a key once, keep the private key off the server, and store only the public key in `capability_issuers`:
+
+```bash
+renews admin generate-capability-key --out issuer.key   # mode 0600
+```
+
+`issue-capability` prints a JSON object; put its `token` in `capability_tokens`. `--expires` takes a duration (`30d`, `12h`) or `never`. A token is checked at startup and on `SIGHUP`: an expired token, an unknown issuer, or a tampered token is a configuration error, not a silent skip.
+
+A capability connection reads only groups its patterns match. `GROUP` on another group answers `411`, `LIST ACTIVE`, `LIST NEWSGROUPS`, `LIST ACTIVE.TIMES`, `LIST BOTGROUPS`, `NEWGROUPS` and `NEWNEWS` omit it, and `ARTICLE`/`HEAD`/`BODY`/`STAT`/`HDR` by message-id answer `430` unless the article's `Newsgroups` names a readable group. Posting requires every `Newsgroups` entry to match a post pattern; otherwise `POST` answers `441` and `IHAVE`/`TAKETHIS` answer `437`/`439`. A peer that authenticates with an account password is no longer limited by its token.
+
+An endpoint in `allowed_peers` keeps full unauthenticated access as before; a token is only needed for endpoints that are not on that list. Both may name the same endpoint.
+
 On startup the server prints `iroh endpoint id:` and `iroh ticket:`. Bots set `server = "slime.onix.computer"`. Publish `id=<endpoint id>` from `renews admin discovery-txt`. That id is stable across restarts and changes only when `iroh.key` changes. The printed ticket embeds direct addresses and changes on every restart; `discovery-txt --ticket` still prints it. See the README section "Bots over iroh" for the `iroh-news` commands.
 
 ## Runtime Configuration Reload

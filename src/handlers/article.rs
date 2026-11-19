@@ -230,6 +230,9 @@ async fn collect_header_values(
                 .await
                 .map_err(|_| ArticleQueryError::MessageIdNotFound)?
             {
+                if !super::utils::may_read_article(session, &article) {
+                    return Err(ArticleQueryError::MessageIdNotFound);
+                }
                 let val = get_field_value(storage, &article, field).await;
                 values.push((0, val));
             } else {

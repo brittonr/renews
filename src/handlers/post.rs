@@ -1,8 +1,8 @@
 //! Posting command handlers.
 
 use super::utils::{
-    check_bandwidth_rejected, comprehensive_validate_article, read_message, record_bandwidth_usage,
-    write_simple,
+    check_bandwidth_rejected, comprehensive_validate_article, may_post_article, read_message,
+    record_bandwidth_usage, write_simple,
 };
 use super::{CommandHandler, HandlerContext, HandlerResult};
 use crate::error::{AuthError, NntpError};
@@ -65,6 +65,12 @@ impl CommandHandler for PostHandler {
             write_simple(&mut ctx.writer, RESP_441_POSTING_FAILED).await?;
             return Ok(());
         };
+
+        if !may_post_article(&ctx.session, &message) {
+            Span::current().record("outcome", "rejected_capability");
+            write_simple(&mut ctx.writer, RESP_441_POSTING_FAILED).await?;
+            return Ok(());
+        }
 
         // Check if this is a control message first
         let is_control = control::is_control_message(&message);

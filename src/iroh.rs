@@ -79,6 +79,10 @@ pub struct IrohBind {
     pub bind_addr: Option<std::net::SocketAddr>,
     /// SQLite URI for runtime peers (`iroh-runtime.db`).
     pub runtime_db: String,
+    /// Ed25519 keys whose capability tokens are trusted.
+    pub capability_issuers: Vec<String>,
+    /// Base64 capability tokens; each admits its audience endpoint.
+    pub capability_tokens: Vec<String>,
 }
 
 /// A running iroh listener.
@@ -206,6 +210,13 @@ pub async fn serve(parts: IrohParts, bind: IrohBind) -> anyhow::Result<IrohServe
         gated_gossip = Some(gated);
     }
     let live = Arc::new(crate::admin::LivePeers::default());
+    let capabilities = Arc::new(crate::capabilities::CapabilityStore::from_config(
+        &bind.capability_issuers,
+        &bind.capability_tokens,
+    )?);
+    if !capabilities.is_empty() {
+        tracing::info!("iroh capability tokens loaded");
+    }
     let started = std::time::Instant::now();
     let endpoint_id_for_admin = endpoint.id().to_string();
     let ticket_slot = Arc::new(std::sync::RwLock::new(String::new()));
@@ -217,6 +228,7 @@ pub async fn serve(parts: IrohParts, bind: IrohBind) -> anyhow::Result<IrohServe
         usage_tracker: parts.usage_tracker,
         runtime: runtime.clone(),
         live: live.clone(),
+        capabilities: capabilities.clone(),
     };
     let admin = crate::admin::AdminProtocol {
         ctx: crate::admin::AdminContext {
@@ -374,6 +386,7 @@ struct NntpProtocol {
     usage_tracker: Arc<UsageTracker>,
     runtime: crate::admin::RuntimeStore,
     live: Arc<crate::admin::LivePeers>,
+    capabilities: Arc<crate::capabilities::CapabilityStore>,
 }
 
 impl std::fmt::Debug for NntpProtocol {
@@ -393,14 +406,22 @@ impl NntpProtocol {
             }
         }
     }
+
+    /// A capability token naming this endpoint, when the allowlist does not.
+    fn capability_for(
+        &self,
+        remote: EndpointId,
+    ) -> Option<Arc<crate::capabilities::CapabilitySession>> {
+        self.capabilities.session_for(remote)
+    }
 }
 
 impl ProtocolHandler for NntpProtocol {
     async fn on_accepting(&self, accepting: Accepting) -> Result<Connection, AcceptError> {
         let connection = accepting.await?;
         let remote = connection.remote_id();
-        if !self.peer_allowed(remote).await {
-            tracing::warn!(endpoint_id = %remote, "rejected iroh peer not on the allowlist");
+        if !self.peer_allowed(remote).await && self.capability_for(remote).is_none() {
+            tracing::warn!(endpoint_id = %remote, "rejected iroh peer not on the allowlist and without a capability token");
             connection.close(1u32.into(), b"endpoint not allowed");
             return Err(AcceptError::from_err(PeerRejected));
         }
@@ -409,8 +430,8 @@ impl ProtocolHandler for NntpProtocol {
 
     async fn accept(&self, connection: Connection) -> Result<(), AcceptError> {
         let remote = connection.remote_id();
-        if !self.peer_allowed(remote).await {
-            tracing::warn!(endpoint_id = %remote, "rejected iroh peer not on the allowlist");
+        if !self.peer_allowed(remote).await && self.capability_for(remote).is_none() {
+            tracing::warn!(endpoint_id = %remote, "rejected iroh peer not on the allowlist and without a capability token");
             connection.close(1u32.into(), b"endpoint not allowed");
             return Err(AcceptError::from_err(PeerRejected));
         }
@@ -440,6 +461,10 @@ impl ProtocolHandler for NntpProtocol {
         let bindings: std::sync::Arc<dyn crate::identity::UserEndpoint> =
             std::sync::Arc::new(self.runtime.clone());
         let username = self.runtime.user_for_endpoint(&caller).await.ok().flatten();
+        let capability = self.capability_for(connection.remote_id());
+        if let Some(capability) = &capability {
+            tracing::info!(endpoint_id = %caller, "iroh peer admitted by capability: {}", capability.label());
+        }
         if let Err(err) = crate::handle_client_key(
             stream,
             storage,
@@ -452,6 +477,7 @@ impl ProtocolHandler for NntpProtocol {
                 endpoint_id: caller,
                 username,
                 bindings,
+                capability,
             }),
         )
         .await
