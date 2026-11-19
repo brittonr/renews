@@ -9,7 +9,7 @@
 //! URL decode.
 
 use std::cmp::Reverse;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 
@@ -157,9 +157,22 @@ fn write_tree(
         segments.push(segment);
     }
 
+    let group_segments: HashMap<&str, &str> = snapshot
+        .groups
+        .iter()
+        .map(|group| group.name.as_str())
+        .zip(segments.iter().map(String::as_str))
+        .collect();
+    let authors = collect_authors(snapshot)?;
+    let author_segments: HashMap<&str, &str> = authors
+        .iter()
+        .map(|author| (author.name.as_str(), author.segment.as_str()))
+        .collect();
+    let backlinks = collect_backlinks(snapshot);
+
     fs::write(
         root.join("index.html"),
-        render_index(snapshot, &segments, title, refresh_seconds),
+        render_index(snapshot, &segments, title, refresh_seconds, &authors),
     )
     .with_context(|| format!("writing {}", root.join("index.html").display()))?;
 
@@ -172,17 +185,41 @@ fn write_tree(
         let index_path = dir.join("index.html");
         fs::write(
             &index_path,
-            render_group(snapshot, group, title, refresh_seconds),
+            render_group(snapshot, group, title, refresh_seconds, &author_segments),
         )
         .with_context(|| format!("writing {}", index_path.display()))?;
         files += 1;
         for article in articles_of(group) {
             let path = dir.join(format!("{}.html", article.number));
-            fs::write(&path, render_article(snapshot, group, article, &by_id))
-                .with_context(|| format!("writing {}", path.display()))?;
+            fs::write(
+                &path,
+                render_article(
+                    snapshot,
+                    group,
+                    article,
+                    &by_id,
+                    &author_segments,
+                    &group_segments,
+                    &backlinks,
+                ),
+            )
+            .with_context(|| format!("writing {}", path.display()))?;
             files += 1;
             articles += 1;
         }
+    }
+
+    let authors_dir = root.join("a");
+    for author in &authors {
+        let dir = join_segment(&authors_dir, &author.segment)?;
+        fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
+        let path = dir.join("index.html");
+        fs::write(
+            &path,
+            render_author(snapshot, title, author, refresh_seconds, &group_segments),
+        )
+        .with_context(|| format!("writing {}", path.display()))?;
+        files += 1;
     }
 
     Ok(Written {
@@ -190,6 +227,118 @@ fn write_tree(
         articles,
         files,
     })
+}
+
+/// One poster, as `From` names it: a session label when the post carried one.
+struct Author<'a> {
+    name: String,
+    segment: String,
+    /// Newest first.
+    articles: Vec<(&'a SnapshotGroup, &'a SnapshotArticle)>,
+}
+
+/// Group every article by its author label, newest first.
+fn collect_authors<'a>(snapshot: &'a Snapshot) -> anyhow::Result<Vec<Author<'a>>> {
+    let mut by_name: BTreeMap<&str, Vec<(&SnapshotGroup, &SnapshotArticle)>> = BTreeMap::new();
+    for group in &snapshot.groups {
+        for article in articles_of(group) {
+            by_name
+                .entry(author_label(article))
+                .or_default()
+                .push((group, article));
+        }
+    }
+    let mut used: HashMap<String, &str> = HashMap::new();
+    let mut authors = Vec::with_capacity(by_name.len());
+    for (name, mut articles) in by_name {
+        let segment = sanitize_segment(name)?;
+        if let Some(other) = used.insert(segment.clone(), name) {
+            bail!("authors {other} and {name} both render to a/{segment}/");
+        }
+        articles.sort_by(|(left_group, left), (right_group, right)| {
+            newest_key(&left.date)
+                .cmp(&newest_key(&right.date))
+                .reverse()
+                .then_with(|| left_group.name.cmp(&right_group.name))
+                .then_with(|| right.number.cmp(&left.number))
+        });
+        authors.push(Author {
+            name: name.to_string(),
+            segment,
+            articles,
+        });
+    }
+    authors.sort_by(|left, right| {
+        newest_key(&right.articles[0].1.date)
+            .cmp(&newest_key(&left.articles[0].1.date))
+            .then_with(|| left.name.cmp(&right.name))
+    });
+    Ok(authors)
+}
+
+/// Sortable stamp for an RFC 2822 date. `0` when the date does not parse, so
+/// it sorts last. Only the advertised fields matter; the zone is ignored
+/// because the swarm's articles are UTC.
+fn newest_key(date: &str) -> u64 {
+    const MONTHS: [&str; 12] = [
+        "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+    ];
+    let tokens: Vec<&str> = date.split_whitespace().collect();
+    let Some(index) = tokens.iter().position(|token| MONTHS.contains(token)) else {
+        return 0;
+    };
+    if index == 0 {
+        return 0;
+    }
+    let (Some(day), Some(year)) = (
+        tokens[index - 1].parse::<u64>().ok(),
+        tokens
+            .get(index + 1)
+            .and_then(|year| year.parse::<u64>().ok()),
+    ) else {
+        return 0;
+    };
+    let (hour, minute, second) = tokens
+        .get(index + 2)
+        .and_then(|time| {
+            let mut parts = time.split(':');
+            Some((
+                parts.next()?.parse::<u64>().ok()?,
+                parts.next()?.parse::<u64>().ok()?,
+                parts
+                    .next()
+                    .and_then(|s| s.parse::<u64>().ok())
+                    .unwrap_or(0),
+            ))
+        })
+        .unwrap_or((0, 0, 0));
+    let month = index as u64;
+    year * 100_000_000 + month * 1_000_000 + day * 10_000 + hour * 100 + minute + second / 60
+}
+
+/// Articles that name this one in `References`, keyed by message-id.
+fn collect_backlinks(
+    snapshot: &Snapshot,
+) -> HashMap<&str, Vec<(&SnapshotGroup, &SnapshotArticle)>> {
+    let mut map: HashMap<&str, Vec<(&SnapshotGroup, &SnapshotArticle)>> = HashMap::new();
+    for group in &snapshot.groups {
+        for article in articles_of(group) {
+            for reference in &article.references {
+                map.entry(reference.as_str())
+                    .or_default()
+                    .push((group, article));
+            }
+        }
+    }
+    for links in map.values_mut() {
+        links.sort_by(|(left_group, left), (right_group, right)| {
+            newest_key(&right.date)
+                .cmp(&newest_key(&left.date))
+                .then_with(|| left_group.name.cmp(&right_group.name))
+                .then_with(|| right.number.cmp(&left.number))
+        });
+    }
+    map
 }
 
 fn articles_of(group: &SnapshotGroup) -> impl Iterator<Item = &SnapshotArticle> {
@@ -238,6 +387,7 @@ fn render_index(
     segments: &[String],
     title: &str,
     refresh_seconds: u64,
+    authors: &[Author<'_>],
 ) -> String {
     let mut body = format!(
         "<h1>{}</h1>\n<p class=\"lead\">Read-only newsgroups.</p>\n",
@@ -271,7 +421,39 @@ fn render_index(
         }
         body.push_str("</tbody>\n</table>\n");
     }
+    if !authors.is_empty() {
+        body.push_str("<h2>Agents</h2>\n<table>\n<thead>\n<tr><th>Author</th><th>Articles</th><th>Latest</th></tr>\n</thead>\n<tbody>\n");
+        for author in authors {
+            body.push_str("<tr><td><a href=\"a/");
+            body.push_str(&escape_html(&author.segment));
+            body.push_str("/index.html\">");
+            body.push_str(&escape_html(&author.name));
+            body.push_str("</a></td><td class=\"num\">");
+            body.push_str(&author.articles.len().to_string());
+            body.push_str("</td><td class=\"date\">");
+            body.push_str(&escape_html(&author.articles[0].1.date));
+            body.push_str("</td></tr>\n");
+        }
+        body.push_str("</tbody>\n</table>\n");
+    }
     page(snapshot, title, &body, refresh_seconds)
+}
+
+/// Link `text` to the author page for `label`, or escape it when the article
+/// has no author page.
+fn author_html(
+    label: &str,
+    text: &str,
+    author_segments: &HashMap<&str, &str>,
+    prefix: &str,
+) -> String {
+    match author_segments.get(label) {
+        Some(segment) => format!(
+            "<a href=\"{prefix}a/{segment}/index.html\">{}</a>",
+            escape_html(text)
+        ),
+        None => escape_html(text),
+    }
 }
 
 fn render_group(
@@ -279,6 +461,7 @@ fn render_group(
     group: &SnapshotGroup,
     title: &str,
     refresh_seconds: u64,
+    author_segments: &HashMap<&str, &str>,
 ) -> String {
     let mut body =
         String::from("<p class=\"crumb\"><a href=\"../../index.html\">groups</a></p>\n<h1>");
@@ -321,7 +504,12 @@ fn render_group(
             body.push_str(".html\">");
             body.push_str(&escape_html(&article.subject));
             body.push_str("</a> <span class=\"from\">");
-            body.push_str(&escape_html(author_label(article)));
+            body.push_str(&author_html(
+                author_label(article),
+                author_label(article),
+                author_segments,
+                "../../",
+            ));
             body.push_str("</span> <span class=\"date\">");
             body.push_str(&escape_html(&article.date));
             body.push_str("</span></div>\n");
@@ -337,6 +525,9 @@ fn render_article(
     group: &SnapshotGroup,
     article: &SnapshotArticle,
     by_id: &HashMap<&str, u64>,
+    author_segments: &HashMap<&str, &str>,
+    group_segments: &HashMap<&str, &str>,
+    backlinks: &HashMap<&str, Vec<(&SnapshotGroup, &SnapshotArticle)>>,
 ) -> String {
     let mut body = String::from(
         "<p class=\"crumb\"><a href=\"../../index.html\">groups</a> / <a href=\"index.html\">",
@@ -345,7 +536,16 @@ fn render_article(
     body.push_str("</a></p>\n<h1>");
     body.push_str(&escape_html(&article.subject));
     body.push_str("</h1>\n<dl class=\"headers\">\n");
-    header_row(&mut body, "From", &escape_html(&article.from));
+    header_row(
+        &mut body,
+        "From",
+        &author_html(
+            author_label(article),
+            &article.from,
+            author_segments,
+            "../../",
+        ),
+    );
     if let Some(session) = signature_line(&article.body) {
         header_row(&mut body, "Session", &escape_html(session));
     }
@@ -370,6 +570,30 @@ fn render_article(
         }
         header_row(&mut body, "References", &refs);
     }
+    if let Some(referrers) = backlinks.get(article.message_id.as_str()) {
+        let mut links = String::new();
+        for (index, (other_group, other)) in referrers.iter().enumerate() {
+            if index > 0 {
+                links.push(' ');
+            }
+            if other_group.name == group.name {
+                links.push_str(&format!(
+                    "<a href=\"{}.html\">#{}</a>",
+                    other.number, other.number
+                ));
+            } else {
+                let segment = group_segments
+                    .get(other_group.name.as_str())
+                    .copied()
+                    .unwrap_or("");
+                links.push_str(&format!(
+                    "<a href=\"../{segment}/{}.html\">#{}</a>",
+                    other.number, other.number
+                ));
+            }
+        }
+        header_row(&mut body, "Referenced by", &links);
+    }
     body.push_str("</dl>\n<pre>");
     body.push_str(&escape_html(&article.body));
     body.push_str("</pre>\n");
@@ -389,9 +613,9 @@ fn signature_line(body: &str) -> Option<&str> {
     (!rest.is_empty()).then_some(rest)
 }
 
-/// Who wrote the article, for the listing: the body signature when the post
-/// carried one, else the display name of `From` (`omp on host, session 1`),
-/// else `From` itself.
+/// Who wrote the article: the body signature when the post carried one, else
+/// the display name of `From` (`omp on host, session 1`), else `From` itself.
+/// Every article of one author renders a page under `a/<segment>/`.
 fn author_label(article: &SnapshotArticle) -> &str {
     signature_line(&article.body)
         .or_else(|| from_display_name(&article.from))
@@ -403,6 +627,43 @@ fn from_display_name(from: &str) -> Option<&str> {
     let (display, _address) = from.rsplit_once('<')?;
     let display = display.trim();
     (!display.is_empty()).then_some(display)
+}
+
+fn render_author(
+    snapshot: &Snapshot,
+    title: &str,
+    author: &Author<'_>,
+    refresh_seconds: u64,
+    group_segments: &HashMap<&str, &str>,
+) -> String {
+    let mut body =
+        String::from("<p class=\"crumb\"><a href=\"../../index.html\">groups</a></p>\n<h1>");
+    body.push_str(&escape_html(&author.name));
+    body.push_str("</h1>\n<p class=\"meta\">");
+    body.push_str(&author.articles.len().to_string());
+    body.push_str(" articles</p>\n<table>\n<thead>\n<tr><th>Group</th><th>Subject</th><th>Date</th></tr>\n</thead>\n<tbody>\n");
+    for (group, article) in &author.articles {
+        let segment = group_segments
+            .get(group.name.as_str())
+            .copied()
+            .unwrap_or("");
+        body.push_str("<tr><td><a href=\"../../g/");
+        body.push_str(&escape_html(segment));
+        body.push_str("/index.html\">");
+        body.push_str(&escape_html(&group.name));
+        body.push_str("</a></td><td><a href=\"../../g/");
+        body.push_str(&escape_html(segment));
+        body.push('/');
+        body.push_str(&article.number.to_string());
+        body.push_str(".html\">");
+        body.push_str(&escape_html(&article.subject));
+        body.push_str("</a></td><td class=\"date\">");
+        body.push_str(&escape_html(&article.date));
+        body.push_str("</td></tr>\n");
+    }
+    body.push_str("</tbody>\n</table>\n");
+    let title = format!("{} — {title}", author.name);
+    page(snapshot, &title, &body, refresh_seconds)
 }
 
 fn linked_id(id: &str, by_id: &HashMap<&str, u64>) -> String {
@@ -668,6 +929,8 @@ mod tests {
             "</body>",
             "<h1>",
             "</h1>",
+            "<h2>",
+            "</h2>",
             "<p>",
             "<p ",
             "</p>",
@@ -763,7 +1026,7 @@ mod tests {
             render_site(&snapshot, &out, DEFAULT_SITE_TITLE, DEFAULT_REFRESH_SECONDS).unwrap();
         assert_eq!(first.groups, 2);
         assert_eq!(first.articles, 5);
-        assert_eq!(first.files, 1 + 2 + 5);
+        assert_eq!(first.files, 1 + 2 + 5 + 3);
         let once = files_under(&out);
         let twice =
             render_site(&snapshot, &out, DEFAULT_SITE_TITLE, DEFAULT_REFRESH_SECONDS).unwrap();
@@ -776,6 +1039,9 @@ mod tests {
         assert_eq!(
             names,
             vec![
+                "a/Ada/index.html",
+                "a/Bea/index.html",
+                "a/Cal/index.html",
                 "g/bots.announce/1.html",
                 "g/bots.announce/index.html",
                 "g/bots.general/1.html",
@@ -806,10 +1072,14 @@ mod tests {
             .1;
         assert!(group.contains("style=\"margin-left: 0em\"><a href=\"1.html\">picnic</a>"));
         assert!(group.contains(
-            "style=\"margin-left: 1em\"><a href=\"3.html\">Re: picnic</a> <span class=\"from\">Bea</span>"
+            "style=\"margin-left: 1em\"><a href=\"3.html\">Re: picnic</a> <span class=\"from\"><a href=\"../../a/Bea/index.html\">Bea</a></span>"
         ));
         assert!(group.contains("style=\"margin-left: 2em\"><a href=\"4.html\">Re: picnic</a>"));
         assert!(group.contains("style=\"margin-left: 0em\"><a href=\"5.html\">other topic</a>"));
+        assert!(
+            group
+                .contains("<span class=\"from\"><a href=\"../../a/Cal/index.html\">Cal</a></span>")
+        );
         let picnic = group.find("href=\"1.html\">picnic").unwrap();
         let reply = group.find("margin-left: 1em").unwrap();
         let nested = group.find("margin-left: 2em").unwrap();
@@ -818,13 +1088,40 @@ mod tests {
         // thread whose newest article is number 4.
         assert!(other < picnic && picnic < reply && reply < nested);
 
+        let referred = &once
+            .iter()
+            .find(|(name, _)| name == "g/bots.general/1.html")
+            .unwrap()
+            .1;
+        // Linking: every article that names this one is a backlink, newest
+        // first, and a same-group link is a bare file name.
+        assert!(
+            referred.contains(
+                "<dt>Referenced by</dt><dd><a href=\"4.html\">#4</a> <a href=\"3.html\">#3</a></dd>"
+            ),
+            "{referred}"
+        );
+
+        let author_page = &once
+            .iter()
+            .find(|(name, _)| name == "a/Bea/index.html")
+            .unwrap()
+            .1;
+        // Tagging: one page per author, newest first, linking the article.
+        assert!(author_page.contains("<h1>Bea</h1>"), "{author_page}");
+        assert!(author_page.contains("1 articles"), "{author_page}");
+        assert!(
+            author_page.contains("<a href=\"../../g/bots.general/3.html\">Re: picnic</a>"),
+            "{author_page}"
+        );
+
         let article = &once
             .iter()
             .find(|(name, _)| name == "g/bots.general/3.html")
             .unwrap()
             .1;
         assert!(article.contains("<pre>I&#39;ll bring bread.\n</pre>"));
-        assert!(article.contains("<dt>From</dt><dd>Bea &lt;bea@bots.local&gt;</dd>"));
+        assert!(article.contains("<dt>From</dt><dd><a href=\"../../a/Bea/index.html\">Bea &lt;bea@bots.local&gt;</a></dd>"));
         assert!(article.contains("<dt>Message-ID</dt><dd><code>&lt;pic-3@slime&gt;</code></dd>"));
         assert!(article.contains("<a href=\"1.html\"><code>&lt;pic-1@slime&gt;</code></a>"));
         assert!(article.contains("<code>&lt;pic-2@slime&gt;</code>"));
@@ -1035,13 +1332,17 @@ mod tests {
 
         let group = fs::read_to_string(out.join("g/bots.general/index.html")).unwrap();
         assert!(
-            group.contains(
-                "Re: picnic</a> <span class=\"from\">omp on britton-desktop, session &lt;abc&amp;&gt;</span>"
-            ),
+            group.contains("Re: picnic</a> <span class=\"from\"><a href=\"../../a/"),
             "{group}"
         );
-        // Unsigned articles keep the machine account.
-        assert!(group.contains("other topic</a> <span class=\"from\">Cal</span>"));
+        assert!(
+            group.contains(">omp on britton-desktop, session &lt;abc&amp;&gt;</a></span>"),
+            "{group}"
+        );
+        // An unsigned article links the display name instead.
+        assert!(group.contains(
+            "other topic</a> <span class=\"from\"><a href=\"../../a/Cal/index.html\">Cal</a></span>"
+        ));
 
         let page = fs::read_to_string(out.join("g/bots.general/3.html")).unwrap();
         assert!(
@@ -1050,8 +1351,10 @@ mod tests {
             ),
             "{page}"
         );
-        // The From header stays the header the article carried.
-        assert!(page.contains("<dt>From</dt><dd>Bea &lt;bea@bots.local&gt;</dd>"));
+        // The From header stays the header the article carried, linked to the
+        // author page the article is filed under (here the signature's).
+        assert!(page.contains("<dt>From</dt><dd><a href=\"../../a/"));
+        assert!(page.contains(">Bea &lt;bea@bots.local&gt;</a></dd>"));
         let unsigned = &mut snapshot;
         unsigned.groups[1].threads[0].articles[1].body = "I&#39;ll bring bread.\n".to_string();
         render_site(unsigned, &out, DEFAULT_SITE_TITLE, DEFAULT_REFRESH_SECONDS).unwrap();
