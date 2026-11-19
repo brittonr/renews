@@ -2,6 +2,8 @@
 
 Review of [n0-computer](https://github.com/n0-computer) and the iroh docs
 (2026-11-19): what renews already uses, what fits next, and what to leave alone.
+The org has 129 public repositories; the ones not named here are forks, GitHub
+Actions, workshop material, or archived experiments.
 
 ## Already used
 
@@ -97,6 +99,14 @@ Review of [n0-computer](https://github.com/n0-computer) and the iroh docs
 - **Public discovery: `iroh-share`, `iroh-content-discovery`, mainline DHT.**
   renews networks are closed by design (allowlist, tailnet); publishing content
   hashes would work against that.
+- **`iroh-dns-server` (archived).** Self-hosted pkarr/DNS publication is not a
+  path; keep the Cloudflare TXT records with the DoH fallback, or publish through
+  a relay's address lookup instead.
+- **`sendme`.** A convenient snapshot or backup copy between two machines, but
+  `dumbpipe` already covers ad-hoc copies and blobs would supersede it; no reason
+  to put a second transfer tool in the deployment.
+- **`willow-rs`, `willow-store`, `krakensync`.** Dormant experiments around the
+  Willow family and bitmap sync; useful as reading for item 6 only.
 - **`iroh-car`, `iroh-io`, `bao-tree`, `iroh-blake3`.** Building blocks for
   blobs and IPFS interop; only relevant with item 7.
 - **`iroh-tor-transport`, `iroh-nym-transport`, `wg-iroh`.** Experiments; a
