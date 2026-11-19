@@ -31,6 +31,10 @@ Actions, workshop material, or archived experiments.
 
 ## Recommended, in order
 
+Status: items 1–4 are in (iroh 1.5 and gossip 0.103, the dumbpipe bridge,
+the `metrics`/`ping` surface, and custom relay URLs). Items 5–8 are design
+only and each needs its own change.
+
 1. **Bump `iroh` to 1.5 and `iroh-gossip` to 0.103.** Small change, and 1.4.2
    carries relay fixes renews should not sit behind. Run the gossip and peer
    tests afterwards.

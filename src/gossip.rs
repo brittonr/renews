@@ -13,8 +13,7 @@ use std::time::{Duration, Instant};
 use iroh::endpoint::Connection;
 use iroh::protocol::{AcceptError, ProtocolHandler};
 use iroh::{Endpoint, EndpointId};
-use iroh_gossip::api::{GossipReceiver, GossipSender};
-use iroh_gossip::{Gossip, TopicId};
+use iroh_gossip::{Gossip, GossipReceiver, GossipSender, TopicId};
 use sha2::{Digest, Sha256};
 use tokio::sync::Mutex as AsyncMutex;
 

@@ -246,6 +246,9 @@ async fn process_article(
     }
 
     let placed = storage.store_article(article).await?;
+    for (group, _) in &placed {
+        crate::metrics::METRICS.article_posted(group);
+    }
     fanout.publish(article, &placed);
     debug!("Article stored successfully");
 

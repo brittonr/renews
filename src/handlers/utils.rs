@@ -274,6 +274,7 @@ pub async fn handle_article_operation<W: AsyncWrite + Unpin>(
     match resolve_articles(storage, session, args.first().map(String::as_str)).await {
         Ok(articles) => {
             for (num, article) in articles {
+                crate::metrics::METRICS.article_fetched(session.current_group().unwrap_or(""));
                 let id = extract_message_id(&article).unwrap_or_default();
 
                 // Record resolved message_id if we didn't have it from args

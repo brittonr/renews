@@ -14,6 +14,7 @@ use std::task::{Context, Poll, ready};
 use std::time::Duration;
 
 use anyhow::Context as _;
+use iroh::RelayMap;
 use iroh::endpoint::{Accepting, Connection, PortmapperConfig, RelayMode, presets};
 use iroh::protocol::{AcceptError, ProtocolHandler, Router};
 use iroh::{Endpoint, EndpointAddr, EndpointId, SecretKey};
@@ -27,6 +28,26 @@ use crate::config::Config;
 use crate::limits::UsageTracker;
 use crate::queue::ArticleQueue;
 use crate::storage::DynStorage;
+
+/// How the endpoint reaches relays.
+///
+/// `relays = false` disables them; an empty `relay_urls` uses the n0
+/// production relays; a non-empty list uses exactly those servers, which is
+/// how a self-hosted `iroh-relay` is selected.
+pub fn relay_mode(relays: bool, relay_urls: &[String]) -> anyhow::Result<RelayMode> {
+    if !relays {
+        if relay_urls.is_empty() {
+            return Ok(RelayMode::Disabled);
+        }
+        anyhow::bail!("iroh.relay_urls is set but iroh.relays is false");
+    }
+    if relay_urls.is_empty() {
+        return Ok(RelayMode::Default);
+    }
+    let map = RelayMap::try_from_iter(relay_urls.iter().map(String::as_str))
+        .map_err(|err| anyhow::anyhow!("invalid iroh.relay_urls entry: {err}"))?;
+    Ok(RelayMode::Custom(map))
+}
 
 /// ALPN for the NNTP-over-iroh protocol.
 pub const ALPN: &[u8] = b"/onix/nntp/1";
@@ -216,10 +237,15 @@ pub async fn serve(parts: IrohParts, bind: IrohBind) -> anyhow::Result<IrohServe
             runtime: admin.ctx.runtime.clone(),
         },
     };
+    let ping = PingProtocol {
+        config: admin.ctx.config.clone(),
+        runtime: admin.ctx.runtime.clone(),
+    };
     let mut router = Router::builder(endpoint)
         .accept(ALPN, nntp)
         .accept(crate::admin::ADMIN_ALPN, admin)
-        .accept(crate::join::JOIN_ALPN, join);
+        .accept(crate::join::JOIN_ALPN, join)
+        .accept(iroh_ping::ALPN, ping);
     if let Some(gated) = gated_gossip {
         router = router.accept(crate::gossip::GOSSIP_ALPN, gated);
     }
@@ -280,6 +306,63 @@ async fn wait_for_ip(endpoint: &Endpoint, budget: Duration) -> EndpointAddr {
             return addr;
         }
         tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
+/// The iroh-ping protocol, allowlisted like the NNTP listener.
+///
+/// It answers `PING` with `PONG` on [`iroh_ping::ALPN`], so `iroh-news ping`
+/// and `iroh-doctor` can measure the path to this server. The crate's own
+/// handler prints to stdout on every ping; this copy keeps the journal clean.
+struct PingProtocol {
+    config: Arc<RwLock<Config>>,
+    runtime: crate::admin::RuntimeStore,
+}
+
+impl std::fmt::Debug for PingProtocol {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PingProtocol").finish_non_exhaustive()
+    }
+}
+
+impl PingProtocol {
+    async fn peer_allowed(&self, remote: EndpointId) -> bool {
+        let cfg = self.config.read().await;
+        match crate::admin::nntp_peer_allowed(&cfg, &self.runtime, remote).await {
+            Ok(allowed) => allowed,
+            Err(err) => {
+                tracing::warn!(error = %err, "iroh runtime allowlist lookup failed");
+                false
+            }
+        }
+    }
+}
+
+impl ProtocolHandler for PingProtocol {
+    async fn on_accepting(&self, accepting: Accepting) -> Result<Connection, AcceptError> {
+        let connection = accepting.await?;
+        let remote = connection.remote_id();
+        if !self.peer_allowed(remote).await {
+            tracing::info!(%remote, "rejected iroh ping from a peer not on the allowlist");
+            connection.close(0u32.into(), b"not allowed");
+            return Err(AcceptError::from_err(PeerRejected));
+        }
+        Ok(connection)
+    }
+
+    async fn accept(&self, connection: Connection) -> Result<(), AcceptError> {
+        let (mut send, mut recv) = connection.accept_bi().await?;
+        let request = recv.read_to_end(4).await.map_err(AcceptError::from_err)?;
+        if request != b"PING" {
+            connection.close(0u32.into(), b"bad ping");
+            return Ok(());
+        }
+        send.write_all(b"PONG")
+            .await
+            .map_err(AcceptError::from_err)?;
+        send.finish()?;
+        let _ = tokio::time::timeout(Duration::from_secs(2), connection.closed()).await;
+        Ok(())
     }
 }
 
@@ -516,3 +599,41 @@ impl std::fmt::Display for PeerRejected {
 }
 
 impl std::error::Error for PeerRejected {}
+
+#[cfg(all(test, feature = "iroh"))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn relay_mode_covers_disabled_default_and_custom() {
+        assert!(matches!(
+            relay_mode(false, &[]).unwrap(),
+            RelayMode::Disabled
+        ));
+        assert!(matches!(relay_mode(true, &[]).unwrap(), RelayMode::Default));
+
+        let custom = relay_mode(
+            true,
+            &[
+                "https://relay.example.com".to_string(),
+                "https://relay2.example.com".to_string(),
+            ],
+        )
+        .unwrap();
+        match custom {
+            RelayMode::Custom(map) => {
+                let urls: Vec<_> = map.urls();
+                assert_eq!(urls.len(), 2);
+            }
+            other => panic!("expected a custom relay map, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn relay_mode_rejects_a_bad_url_and_a_disabled_list() {
+        let err = relay_mode(true, &["not a url".to_string()]).unwrap_err();
+        assert!(err.to_string().contains("iroh.relay_urls"), "{err}");
+        let err = relay_mode(false, &["https://relay.example.com".to_string()]).unwrap_err();
+        assert!(err.to_string().contains("relays is false"), "{err}");
+    }
+}

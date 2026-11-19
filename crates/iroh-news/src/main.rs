@@ -53,6 +53,10 @@ struct Cli {
 enum Command {
     /// Print this bot's endpoint id as JSON, for the server allowlist.
     Id,
+    /// Measure the round trip to the server with the iroh-ping protocol.
+    ///
+    /// Does not authenticate and opens no NNTP session.
+    Ping,
     /// List active newsgroups.
     Groups,
     /// Create or inspect groups.
@@ -219,6 +223,8 @@ enum GroupOp {
 #[derive(Subcommand)]
 enum AdminOp {
     Status,
+    /// Process counters: connections, articles, and per-group counts.
+    Metrics,
     DiscoveryTxt {
         name: String,
         /// Print `ticket=` instead of the stable `id=`.
@@ -419,6 +425,12 @@ async fn run() -> anyhow::Result<()> {
                 "group": name,
                 "description": description,
             }))?;
+            Ok(())
+        }
+        Command::Ping => {
+            let settings = load_settings(&cli, &state_dir)?;
+            let rtt = iroh_news::Session::ping(settings).await?;
+            print_json(&serde_json::json!({ "rtt_ms": rtt.as_secs_f64() * 1000.0 }))?;
             Ok(())
         }
         Command::Groups => {
@@ -974,6 +986,7 @@ async fn admin_args(op: &AdminOp) -> anyhow::Result<(String, serde_json::Value)>
     use serde_json::json;
     Ok(match op {
         AdminOp::Status => ("status".into(), json!({})),
+        AdminOp::Metrics => ("metrics".into(), json!({})),
         AdminOp::DiscoveryTxt { name, ticket } => (
             "discovery_txt".into(),
             json!({"name": name, "ticket": ticket}),

@@ -18,10 +18,11 @@ clap = { version = "4", features = ["derive"] }
 # Same version as secretspec, to find its global config the way it does.
 etcetera = "0.11"
 futures-util = "0.3"
-iroh-gossip = { version = "0.101", default-features = false, features = ["net"] }
+iroh-gossip = { version = "0.103", default-features = false, features = ["net"] }
 hickory-resolver = "0.25"
 iroh = { workspace = true }
 iroh-tickets = { workspace = true }
+iroh-ping = "1.0"
 nntp-client = { path = "../nntp-client" }
 schemars = "1"
 serde = { version = "1", features = ["derive"] }

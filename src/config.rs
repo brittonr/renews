@@ -121,10 +121,17 @@ pub struct IrohConfig {
     #[serde(default = "default_true")]
     pub relays: bool,
 
-    /// Wait up to 15s for an n0 relay before printing the ticket. Ignored
+    /// Wait up to 15s for a relay before printing the ticket. Ignored
     /// when `relays` is false.
     #[serde(default = "default_true")]
     pub wait_for_relay: bool,
+
+    /// Relay servers to use instead of the n0 production relays, for example
+    /// a self-hosted `iroh-relay`. Empty means the n0 defaults. Every URL must
+    /// be an `https://` relay URL; `relays = false` cannot be combined with
+    /// this list.
+    #[serde(default)]
+    pub relay_urls: Vec<String>,
 
     /// Unauthenticated join requests. Off unless explicitly enabled.
     #[serde(default)]
@@ -210,6 +217,7 @@ impl Default for IrohConfig {
             bind_addr: None,
             relays: true,
             wait_for_relay: true,
+            relay_urls: Vec::new(),
             join_requests: JoinRequestsConfig::default(),
             gossip: GossipConfig::default(),
         }

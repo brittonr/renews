@@ -187,6 +187,32 @@ impl Session {
         })
     }
 
+    /// Measure the round trip to the server's endpoint with the iroh-ping
+    /// protocol. Opens no NNTP session and sends no credentials, so it also
+    /// works before an endpoint is on the allowlist.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the endpoint cannot be resolved or the server does
+    /// not answer within the ping timeout.
+    pub async fn ping(settings: Settings) -> anyhow::Result<std::time::Duration> {
+        let endpoint = bind_client_endpoint(settings.secret_key, settings.relays).await?;
+        let addr = dial_addr(
+            &settings.server,
+            &settings.state_dir,
+            settings.discovery,
+            settings.relays,
+            settings.server_id,
+        )
+        .await?;
+        let rtt = iroh_ping::Ping::new()
+            .ping(&endpoint, addr)
+            .await
+            .map_err(|err| anyhow::anyhow!("iroh ping: {err}"))?;
+        endpoint.close().await;
+        Ok(rtt)
+    }
+
     /// `LIST ACTIVE`.
     ///
     /// # Errors

@@ -557,6 +557,7 @@ impl AdminContext {
             "delete_article" => self.delete_article(args).await?,
             "delete_group" => self.delete_group(args).await?,
             "rate_limits" => self.rate_limits().await?,
+            "metrics" => self.metrics().await?,
             "approve_join" => self.approve_join(args).await?,
             "list_join_requests" => self.list_join_requests().await?,
             "approve_join_request" => self.approve_join_request(args).await?,
@@ -793,6 +794,16 @@ impl AdminContext {
         }
         self.storage.remove_group(name).await?;
         Ok(json!({"deleted": name}))
+    }
+
+    /// Process counters plus the live peer counts; cheap enough to poll.
+    async fn metrics(&self) -> anyhow::Result<Value> {
+        let mut snapshot = crate::metrics::METRICS.snapshot();
+        snapshot["live_peers"] = json!({
+            "nntp": self.live.nntp.len(),
+            "admin": self.live.admin.len(),
+        });
+        Ok(snapshot)
     }
 
     async fn rate_limits(&self) -> anyhow::Result<Value> {

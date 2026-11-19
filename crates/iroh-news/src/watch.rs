@@ -13,8 +13,7 @@ use iroh::address_lookup::memory::MemoryLookup;
 use iroh::endpoint::Connection;
 use iroh::protocol::{AcceptError, ProtocolHandler, Router};
 use iroh::{Endpoint, EndpointId, Signature};
-use iroh_gossip::api::Message;
-use iroh_gossip::{Gossip, TopicId};
+use iroh_gossip::{Event, Gossip, Message, TopicId};
 use serde::Deserialize;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -104,7 +103,7 @@ impl WatchSession {
                 let _keep = sender;
                 while let Some(event) = receiver.next().await {
                     let Ok(event) = event else { continue };
-                    let iroh_gossip::api::Event::Received(message) = event else {
+                    let Event::Received(message) = event else {
                         continue;
                     };
                     if let Some(note) = accept_note(server_id, &expect, &message)

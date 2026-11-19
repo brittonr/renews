@@ -14,6 +14,7 @@ let
   peer = "0000000000000000000000000000000000000000000000000000000000000001";
   otherPeer = "0000000000000000000000000000000000000000000000000000000000000002";
   stub = pkgs.writeShellScriptBin "renews" "exit 0";
+  stubBridge = pkgs.writeShellScriptBin "dumbpipe" "exit 0";
 
   evaluate =
     extra:
@@ -27,6 +28,7 @@ let
           services.renews-iroh = {
             enable = true;
             package = stub;
+            relayUrls = [ "https://relay.example.com" ];
             bots.top.passwordFile = "/run/keys/top";
             instances.swarm = {
               listenAddress = "127.0.0.1:1119";
@@ -44,6 +46,10 @@ let
               ];
               bots.member.passwordFile = "/run/keys/member";
               groups = [ "bots.claims" ];
+              legacyBridge = {
+                enable = true;
+                package = stubBridge;
+              };
             };
             instances.disabled.enable = false;
           };
@@ -65,6 +71,10 @@ let
   zeroPort = evaluate {
     services.renews-iroh.instances.swarm.irohBindAddress = lib.mkForce "100.64.0.1:0";
   };
+  relayClash = evaluate {
+    services.renews-iroh.relayUrls = [ "https://relay.example.com" ];
+    services.renews-iroh.relays = false;
+  };
 
   units = valid.systemd.services;
   top = units.renews-iroh.serviceConfig;
@@ -85,6 +95,14 @@ assert
 assert builtins.elem "AF_NETLINK" swarm.RestrictAddressFamilies;
 assert lib.length (failedAssertions clashing) == 2;
 assert lib.length (failedAssertions zeroPort) == 1;
+assert lib.length (failedAssertions relayClash) == 1;
+
+# The bridge unit exists only where it is enabled, forwards to that server's
+# plain listener, and writes its ticket into its own state directory.
+assert !(units ? renews-iroh-dumbpipe);
+assert lib.hasInfix "listen-tcp --host 127.0.0.1:1119" units.renews-iroh-swarm-dumbpipe.serviceConfig.ExecStart;
+assert units.renews-iroh-swarm-dumbpipe.serviceConfig.StateDirectory == "renews-swarm-dumbpipe";
+assert units.renews-iroh-swarm-dumbpipe.serviceConfig.StandardOutput == "append:/var/lib/renews-swarm-dumbpipe/ticket";
 pkgs.runCommand "renews-iroh-module" { nativeBuildInputs = [ pkgs.python3 ]; } ''
   top_config=${configOf top}
   swarm_config=${configOf swarm}
@@ -109,6 +127,7 @@ pkgs.runCommand "renews-iroh-module" { nativeBuildInputs = [ pkgs.python3 ]; } '
   assert swarm["iroh"]["admin_peers"] == peers, swarm["iroh"]
   assert swarm["iroh"]["bind_addr"] == "100.64.0.1:1119", swarm["iroh"]
   assert swarm["iroh"]["relays"] is False, swarm["iroh"]
+  assert top["iroh"]["relay_urls"] == ["https://relay.example.com"], top["iroh"]
   assert swarm["iroh"]["wait_for_relay"] is False, swarm["iroh"]
   assert swarm["group_prefixes"] == ["bots.", "swarm."], swarm["group_prefixes"]
   PY

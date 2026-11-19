@@ -21,6 +21,7 @@ pub mod iroh;
 #[cfg(feature = "iroh")]
 pub mod join;
 pub mod limits;
+pub mod metrics;
 pub mod notify;
 pub mod overview;
 pub mod peers;
@@ -117,6 +118,8 @@ where
     S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
 {
     use crate::responses::*;
+
+    let _connection = crate::metrics::ConnectionGuard::new();
 
     let (read_half, write_half) = io::split(socket);
     let reader = BufReader::new(read_half);

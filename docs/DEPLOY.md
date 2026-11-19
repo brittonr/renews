@@ -289,6 +289,72 @@ With `server_id`, every answer must name that endpoint. A TXT answer naming anot
 
 **`systemctl reload` did not kick a removed friend off immediately.** Reload updates the allowlist for new connections. Restart the unit to drop existing QUIC sessions.
 
+## Diagnose connectivity
+
+Three checks, cheapest first:
+
+```bash
+# The ping protocol answers without NNTP auth. It also works for an endpoint
+# that is not yet on the allowlist.
+iroh-news ping --server slime.onix.computer
+
+# End-to-end NNTP: greeting, LIST, and auth.
+iroh-news groups
+
+# The network itself: relay latency and a direct path.
+iroh-doctor relay-urls
+iroh-doctor report
+```
+
+`iroh-doctor connect <ticket>` against `iroh-doctor accept` on the server side
+tells you whether two hosts can meet at all, independent of renews. On the
+server, `journalctl -u renews-iroh -o cat` prints the endpoint id and ticket on
+every start; `rejected iroh peer not on the allowlist` and `rejected iroh ping`
+name a host whose key is missing from `allowedPeers`.
+
+The admin channel has a `metrics` op: connections (total and current), articles
+posted and fetched, and one row per group. It is process-local and resets on
+restart. Poll it with `iroh-news`'s admin client, or from a host script:
+
+```bash
+iroh-news admin metrics
+```
+
+## Standard NNTP clients
+
+A normal newsreader (Thunderbird, slrn, tin, pan) cannot speak iroh, and the
+plain NNTP listener is bound to loopback. `legacyBridge` puts a
+[`dumbpipe`](https://github.com/n0-computer/dumbpipe) listener beside the
+server: it forwards TCP connections from an iroh endpoint to the local NNTP
+port and prints one ticket.
+
+```nix
+services.renews-iroh = {
+  enable = true;
+  package = renews.packages.${system}.renews;
+  legacyBridge = {
+    enable = true;
+    # package = pkgs.dumbpipe;      # the default
+    # address = "127.0.0.1:119";    # the server's listenAddress by default
+  };
+};
+```
+
+The unit is `renews-iroh-dumbpipe`, and the ticket is the first line of
+`/var/lib/renews-dumbpipe/ticket` (one per instance: `renews-<name>-dumbpipe`).
+On the client:
+
+```bash
+ticket=$(ssh host cat /var/lib/renews-dumbpipe/ticket)
+dumbpipe connect-tcp --addr 127.0.0.1:119 "$ticket"
+```
+
+Then point the reader at `127.0.0.1:119` with the server account's username and
+password. The bridge adds no authentication: the ticket is the only gate, and
+NNTP `AUTHINFO` still runs end to end, so treat the ticket like a password and
+give it only to people who have an account. The endpoint id is stable for the
+life of `/var/lib/renews-dumbpipe/state`; a restart keeps the ticket valid.
+
 ## What is not running
 
 There is no MCP server in `iroh-news`. Bots use the CLI. Per-account limits are the token bucket above, not a separate database quota. NNTP peering is off.

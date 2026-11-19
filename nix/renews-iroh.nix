@@ -87,6 +87,17 @@ let
         '';
       };
 
+      relayUrls = lib.mkOption {
+        type = lib.types.listOf lib.types.str;
+        default = [ ];
+        example = [ "https://relay.example.com" ];
+        description = ''
+          Relay servers to use instead of the n0 production relays, for
+          example a self-hosted `iroh-relay`. Empty keeps the n0 defaults.
+          Cannot be combined with `relays = false`.
+        '';
+      };
+
       siteName = lib.mkOption {
         type = lib.types.str;
         default = "bots.local";
@@ -259,6 +270,33 @@ let
         '';
       };
 
+      legacyBridge = {
+        enable = lib.mkEnableOption ''
+          a dumbpipe TCP bridge, so standard NNTP clients (Thunderbird, slrn,
+          tin, pan) can read this server over iroh without iroh-news
+        '';
+        package = lib.mkOption {
+          type = lib.types.package;
+          default = pkgs.dumbpipe;
+          defaultText = lib.literalExpression "pkgs.dumbpipe";
+          description = ''
+            dumbpipe package. The bridge runs `dumbpipe listen-tcp` beside the
+            server and writes its ticket to
+            `/var/lib/<stateDirectory>-dumbpipe/ticket`; a client runs
+            `dumbpipe connect-tcp --addr 127.0.0.1:<port> <ticket>`.
+          '';
+        };
+        address = lib.mkOption {
+          type = lib.types.nullOr lib.types.str;
+          default = null;
+          description = ''
+            NNTP `host:port` the bridge forwards to. Defaults to this server's
+            `listenAddress`. Keep it on loopback; the bridge adds no NNTP
+            authentication of its own.
+          '';
+        };
+      };
+
       extraConfig = lib.mkOption {
         type = lib.types.lines;
         default = "";
@@ -288,6 +326,9 @@ let
   keyCredential = "iroh-key";
 
   listenPort = server: lib.toInt (lib.last (lib.splitString ":" server.listenAddress));
+
+  # Where the dumbpipe bridge forwards; the plain NNTP listener unless set.
+  bridgeAddress = server: if server.legacyBridge.address != null then server.legacyBridge.address else server.listenAddress;
 
   mkConfigFile =
     unitName: server:
@@ -323,7 +364,10 @@ let
       key_path = "${stateDir}/iroh.key"
       localhost_tcp = true${
         lib.optionalString (server.irohBindAddress != null) "\nbind_addr = \"${server.irohBindAddress}\""
-      }${lib.optionalString (!server.relays) "\nrelays = false\nwait_for_relay = false"}
+      }${lib.optionalString (!server.relays) "\nrelays = false\nwait_for_relay = false"}${
+        lib.optionalString (server.relayUrls != [ ])
+          "\nrelay_urls = [ ${lib.concatMapStringsSep ", " (u: ''"${u}"'') server.relayUrls} ]"
+      }
       allowed_peers = [
       ${peerLines}
       ]
@@ -467,6 +511,10 @@ let
         message = "${path}.bots names must match [A-Za-z0-9._-]+ (they name systemd credentials)";
       }
       {
+        assertion = server.relays || server.relayUrls == [ ];
+        message = "${path}.relayUrls needs relays = true";
+      }
+      {
         assertion = server.secretKeyFile == null || lib.hasPrefix "/" server.secretKeyFile;
         message = "${path}.secretKeyFile must be an absolute path, not a Nix store path";
       }
@@ -551,6 +599,41 @@ in
       server: lib.optional server.openFirewall (listenPort server)
     ) (lib.attrValues servers);
 
-    systemd.services = lib.mapAttrs mkUnit servers;
+    systemd.services = lib.mapAttrs mkUnit servers // lib.mapAttrs' (
+      name: server:
+      lib.nameValuePair "${name}-dumbpipe" {
+        description = "dumbpipe TCP bridge to ${bridgeAddress server}";
+        wantedBy = [ "multi-user.target" ];
+        after = [ "${name}.service" ];
+        wants = [ "${name}.service" ];
+        serviceConfig = {
+          Type = "simple";
+          DynamicUser = true;
+          StateDirectory = "${server.stateDirectory}-dumbpipe";
+          StateDirectoryMode = "0700";
+          UMask = "0077";
+          ExecStart = "${server.legacyBridge.package}/bin/dumbpipe listen-tcp --host ${bridgeAddress server}";
+          # The ticket is printed once at startup; the journal keeps the rest.
+          StandardOutput = "append:/var/lib/${server.stateDirectory}-dumbpipe/ticket";
+          Restart = "on-failure";
+          RestartSec = "5s";
+          NoNewPrivileges = true;
+          PrivateTmp = true;
+          PrivateDevices = true;
+          ProtectSystem = "strict";
+          ProtectHome = true;
+          ProtectClock = true;
+          ProtectKernelTunables = true;
+          ProtectKernelModules = true;
+          ProtectKernelLogs = true;
+          ProtectControlGroups = true;
+          ProtectHostname = true;
+          RestrictSUIDSGID = true;
+          RestrictRealtime = true;
+          LockPersonality = true;
+          SystemCallArchitectures = "native";
+        };
+      }
+    ) (lib.filterAttrs (_: server: server.legacyBridge.enable) servers);
   };
 }

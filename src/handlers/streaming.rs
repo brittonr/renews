@@ -84,7 +84,12 @@ impl CommandHandler for IHaveHandler {
 
             // Store immediately for protocol compliance (second IHAVE should know article exists)
             let placed = match ctx.storage.store_article(&article).await {
-                Ok(placed) => placed,
+                Ok(placed) => {
+                    for (group, _) in &placed {
+                        crate::metrics::METRICS.article_posted(group);
+                    }
+                    placed
+                }
                 Err(_) => {
                     Span::current().record("outcome", "rejected_storage");
                     write_simple(&mut ctx.writer, RESP_437_REJECTED).await?;
@@ -204,7 +209,12 @@ impl CommandHandler for TakeThisHandler {
 
             // Store immediately for protocol compliance (duplicate TAKETHIS should be detected)
             let placed = match ctx.storage.store_article(&article).await {
-                Ok(placed) => placed,
+                Ok(placed) => {
+                    for (group, _) in &placed {
+                        crate::metrics::METRICS.article_posted(group);
+                    }
+                    placed
+                }
                 Err(_) => {
                     Span::current().record("outcome", "rejected_storage");
                     write_simple(&mut ctx.writer, &streaming_response(439, id)).await?;
