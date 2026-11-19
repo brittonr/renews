@@ -546,8 +546,17 @@ fn render_article(
             "../../",
         ),
     );
-    if let Some(session) = signature_line(&article.body) {
-        header_row(&mut body, "Session", &escape_html(session));
+    if let Some(purpose) = body_field(&article.body, "purpose") {
+        header_row(&mut body, "Purpose", &escape_html(purpose));
+    }
+    if let Some(holder) = body_field(&article.body, "holder") {
+        header_row(&mut body, "Holder", &escape_html(holder));
+    }
+    if let Some(fence) = body_field(&article.body, "fence") {
+        header_row(&mut body, "Fence", &escape_html(fence));
+    }
+    if let Some(eta) = claim_eta(article) {
+        header_row(&mut body, "ETA", &escape_html(&eta));
     }
     header_row(&mut body, "Date", &escape_html(&article.date));
     header_row(
@@ -613,13 +622,33 @@ fn signature_line(body: &str) -> Option<&str> {
     (!rest.is_empty()).then_some(rest)
 }
 
-/// Who wrote the article: the body signature when the post carried one, else
-/// the display name of `From` (`omp on host, session 1`), else `From` itself.
-/// Every article of one author renders a page under `a/<segment>/`.
+/// Who wrote the article: the display name of `From` (`omp on host, session 1`,
+/// `kiln on host`), because that is where a client puts its identity. A post
+/// whose display name is only the account's own name (`britton-desktop
+/// <britton-desktop@swarm.local>`) falls back to its body signature, and a
+/// bare address is the last resort. Every author renders a page under
+/// `a/<segment>/`.
 fn author_label(article: &SnapshotArticle) -> &str {
-    signature_line(&article.body)
-        .or_else(|| from_display_name(&article.from))
-        .unwrap_or(&article.from)
+    match (
+        from_display_name(&article.from),
+        from_account_name(&article.from),
+    ) {
+        (Some(display), Some(account)) if display != account => display,
+        _ => signature_line(&article.body)
+            .or_else(|| from_display_name(&article.from))
+            .unwrap_or(&article.from),
+    }
+}
+
+/// `britton-desktop <britton-desktop@swarm.local>` -> `britton-desktop`;
+/// `bot@host` -> `bot`.
+fn from_account_name(from: &str) -> Option<&str> {
+    let address = match from.rsplit_once('<') {
+        Some((_, address)) => address.trim_end_matches('>').trim(),
+        None => from.trim(),
+    };
+    let (local, _domain) = address.split_once('@')?;
+    (!local.is_empty()).then_some(local)
 }
 
 /// `omp <omp@host>` -> `omp`; `omp@host` -> `None`.
@@ -664,6 +693,117 @@ fn render_author(
     body.push_str("</tbody>\n</table>\n");
     let title = format!("{} — {title}", author.name);
     page(snapshot, &title, &body, refresh_seconds)
+}
+
+/// One `name: value` line from a body, case-insensitive, first match wins.
+fn body_field<'a>(body: &'a str, name: &str) -> Option<&'a str> {
+    body.lines().find_map(|line| {
+        let (key, value) = line.split_once(':')?;
+        (key.trim().eq_ignore_ascii_case(name))
+            .then(|| value.trim())
+            .filter(|value| !value.is_empty())
+    })
+}
+
+/// The claim's ETA in one shape: `eta: <RFC 3339>` as written, or a Kiln
+/// `expected lease: N minutes` added to the article's Date.
+fn claim_eta(article: &SnapshotArticle) -> Option<String> {
+    if let Some(eta) = body_field(&article.body, "eta") {
+        let eta = eta.trim_end_matches('>').trim_start_matches('<');
+        return rfc3339_seconds(eta).map(format_utc);
+    }
+    let minutes: i64 = body_field(&article.body, "expected lease")?
+        .split_whitespace()
+        .next()?
+        .parse()
+        .ok()?;
+    Some(format_utc(article_seconds(&article.date)? + minutes * 60))
+}
+
+fn article_seconds(date: &str) -> Option<i64> {
+    let tokens: Vec<&str> = date.split_whitespace().collect();
+    const MONTHS: [&str; 12] = [
+        "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+    ];
+    let (index, month) = tokens.iter().enumerate().find_map(|(index, token)| {
+        MONTHS
+            .iter()
+            .position(|month| month == token)
+            .map(|month| (index, month as i64 + 1))
+    })?;
+    let day: i64 = tokens.get(index.checked_sub(1)?)?.parse().ok()?;
+    let year: i64 = tokens.get(index + 1)?.parse().ok()?;
+    let (hour, minute, second) = tokens.get(index + 2).and_then(|time| {
+        let mut parts = time.split(':');
+        Some((
+            parts.next()?.parse::<i64>().ok()?,
+            parts.next()?.parse::<i64>().ok()?,
+            parts
+                .next()
+                .and_then(|s| s.parse::<i64>().ok())
+                .unwrap_or(0),
+        ))
+    })?;
+    Some(days_from_civil(year, month, day) * 86_400 + hour * 3600 + minute * 60 + second)
+}
+
+/// `YYYY-MM-DDTHH:MM[:SS]Z` -> seconds since the epoch.
+fn rfc3339_seconds(eta: &str) -> Option<i64> {
+    let (date, time) = eta.split_once('T')?;
+    let mut parts = date.split('-');
+    let year: i64 = parts.next()?.parse().ok()?;
+    let month: i64 = parts.next()?.parse().ok()?;
+    let day: i64 = parts.next()?.parse().ok()?;
+    let mut clock = time.trim_end_matches('Z').split(':');
+    let hour: i64 = clock.next()?.parse().ok()?;
+    let minute: i64 = clock.next()?.parse().ok()?;
+    let second: i64 = clock.next().and_then(|s| s.parse().ok()).unwrap_or(0);
+    Some(days_from_civil(year, month, day) * 86_400 + hour * 3600 + minute * 60 + second)
+}
+
+/// Days since 1970-01-01 for a proleptic Gregorian date (Howard Hinnant).
+fn days_from_civil(year: i64, month: i64, day: i64) -> i64 {
+    let year = if month <= 2 { year - 1 } else { year };
+    let era = if year >= 0 { year } else { year - 399 } / 400;
+    let year_of_era = year - era * 400;
+    let shifted_month = (month + 9) % 12;
+    let day_of_year = (153 * shifted_month + 2) / 5 + day - 1;
+    let day_of_era = year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
+    era * 146_097 + day_of_era - 719_468
+}
+
+/// `YYYY-MM-DDTHH:MMZ`, the shape a claim's `eta:` uses.
+fn format_utc(seconds: i64) -> String {
+    let days = seconds.div_euclid(86_400);
+    let rest = seconds.rem_euclid(86_400);
+    let (year, month, day) = civil_from_days(days);
+    format!(
+        "{year:04}-{month:02}-{day:02}T{:02}:{:02}Z",
+        rest / 3600,
+        rest % 3600 / 60
+    )
+}
+
+/// Inverse of [`days_from_civil`].
+fn civil_from_days(days: i64) -> (i64, i64, i64) {
+    let days = days + 719_468;
+    let era = if days >= 0 { days } else { days - 146_096 } / 146_097;
+    let day_of_era = days - era * 146_097;
+    let year_of_era =
+        (day_of_era - day_of_era / 1460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
+    let mut year = year_of_era + era * 400;
+    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
+    let shifted_month = (5 * day_of_year + 2) / 153;
+    let day = day_of_year - (153 * shifted_month + 2) / 5 + 1;
+    let month = if shifted_month < 10 {
+        shifted_month + 3
+    } else {
+        shifted_month - 9
+    };
+    if month <= 2 {
+        year += 1;
+    }
+    (year, month, day)
 }
 
 fn linked_id(id: &str, by_id: &HashMap<&str, u64>) -> String {
@@ -1319,7 +1459,9 @@ mod tests {
     }
 
     #[test]
-    fn a_signature_names_the_session_in_the_listing_and_the_article() {
+    fn from_names_the_author_and_a_bare_account_falls_back_to_the_signature() {
+        // A From with its own display name is the author; a legacy body
+        // signature adds no row and does not rename it.
         let mut snapshot = example();
         let article = &mut snapshot.groups[1].threads[0].articles[1];
         article.body = format!(
@@ -1332,35 +1474,78 @@ mod tests {
 
         let group = fs::read_to_string(out.join("g/bots.general/index.html")).unwrap();
         assert!(
-            group.contains("Re: picnic</a> <span class=\"from\"><a href=\"../../a/"),
+            group.contains(
+                "Re: picnic</a> <span class=\"from\"><a href=\"../../a/Bea/index.html\">Bea</a></span>"
+            ),
             "{group}"
+        );
+        let page = fs::read_to_string(out.join("g/bots.general/3.html")).unwrap();
+        assert!(!page.contains("<dt>Session</dt>"), "{page}");
+        assert!(
+            page.contains("<dt>From</dt><dd><a href=\"../../a/Bea/index.html\">Bea &lt;bea@bots.local&gt;</a></dd>"),
+            "{page}"
+        );
+
+        // A bare machine account has no identity of its own, so the body
+        // signature labels the author instead.
+        let mut bare = example();
+        let article = &mut bare.groups[1].threads[0].articles[1];
+        article.from = "britton-desktop <britton-desktop@swarm.local>".to_string();
+        article.body = format!(
+            "{}\n\n\u{2014} omp on britton-desktop, session 01a1eba6\n",
+            article.body.trim_end()
+        );
+        render_site(&bare, &out, DEFAULT_SITE_TITLE, DEFAULT_REFRESH_SECONDS).unwrap();
+        let group = fs::read_to_string(out.join("g/bots.general/index.html")).unwrap();
+        assert!(
+            group.contains(">omp on britton-desktop, session 01a1eba6</a></span>"),
+            "{group}"
+        );
+        assert_pages_are_static(&out);
+    }
+
+    #[test]
+    fn claim_metadata_rows_are_parsed_and_eta_normalized() {
+        let mut snapshot = example();
+        let article = &mut snapshot.groups[1].threads[0].articles[0];
+        article.from = "kiln on britton-desktop <kiln@swarm.local>".to_string();
+        article.date = "Thu, 19 Nov 2026 14:51:36 +0000".to_string();
+        article.subject = "CLAIM brittonr/0x1de docs".to_string();
+        article.body = "Claiming through the Kiln fleet.\npurpose: Write the doc\nholder: omp on britton-desktop\nfence: 23\nexpected lease: 120 minutes\n".to_string();
+        let dir = tempfile::tempdir().unwrap();
+        let out = dir.path().join("site");
+        render_site(&snapshot, &out, DEFAULT_SITE_TITLE, DEFAULT_REFRESH_SECONDS).unwrap();
+        let page = fs::read_to_string(out.join("g/bots.general/1.html")).unwrap();
+        assert!(
+            page.contains("<dt>Purpose</dt><dd>Write the doc</dd>"),
+            "{page}"
         );
         assert!(
-            group.contains(">omp on britton-desktop, session &lt;abc&amp;&gt;</a></span>"),
-            "{group}"
+            page.contains("<dt>Holder</dt><dd>omp on britton-desktop</dd>"),
+            "{page}"
         );
-        // An unsigned article links the display name instead.
-        assert!(group.contains(
-            "other topic</a> <span class=\"from\"><a href=\"../../a/Cal/index.html\">Cal</a></span>"
-        ));
-
-        let page = fs::read_to_string(out.join("g/bots.general/3.html")).unwrap();
+        assert!(page.contains("<dt>Fence</dt><dd>23</dd>"), "{page}");
+        assert!(
+            page.contains("<dt>ETA</dt><dd>2026-11-19T16:51Z</dd>"),
+            "{page}"
+        );
+        assert!(!page.contains("<dt>Session</dt>"), "{page}");
         assert!(
             page.contains(
-                "<dt>Session</dt><dd>omp on britton-desktop, session &lt;abc&amp;&gt;</dd>"
+                "<dt>From</dt><dd><a href=\"../../a/kiln~20on~20britton-desktop/index.html\">"
             ),
             "{page}"
         );
-        // The From header stays the header the article carried, linked to the
-        // author page the article is filed under (here the signature's).
-        assert!(page.contains("<dt>From</dt><dd><a href=\"../../a/"));
-        assert!(page.contains(">Bea &lt;bea@bots.local&gt;</a></dd>"));
-        let unsigned = &mut snapshot;
-        unsigned.groups[1].threads[0].articles[1].body = "I&#39;ll bring bread.\n".to_string();
-        render_site(unsigned, &out, DEFAULT_SITE_TITLE, DEFAULT_REFRESH_SECONDS).unwrap();
-        let page = fs::read_to_string(out.join("g/bots.general/3.html")).unwrap();
-        assert!(!page.contains("<dt>Session</dt>"), "{page}");
-        assert_pages_are_static(&out);
+
+        let mut explicit = example();
+        explicit.groups[1].threads[0].articles[0].body =
+            "work\neta: 2026-11-19T07:00:00Z\n".to_string();
+        render_site(&explicit, &out, DEFAULT_SITE_TITLE, DEFAULT_REFRESH_SECONDS).unwrap();
+        let page = fs::read_to_string(out.join("g/bots.general/1.html")).unwrap();
+        assert!(
+            page.contains("<dt>ETA</dt><dd>2026-11-19T07:00Z</dd>"),
+            "{page}"
+        );
     }
 
     #[test]
