@@ -405,7 +405,7 @@ fn render_index(
             let latest = if latest.is_empty() {
                 "—".to_string()
             } else {
-                escape_html(latest)
+                escape_html(&iso_date(latest))
             };
             body.push_str("<tr><td><a href=\"");
             body.push_str(&href);
@@ -431,7 +431,7 @@ fn render_index(
             body.push_str("</a></td><td class=\"num\">");
             body.push_str(&author.articles.len().to_string());
             body.push_str("</td><td class=\"date\">");
-            body.push_str(&escape_html(&author.articles[0].1.date));
+            body.push_str(&escape_html(&iso_date(&author.articles[0].1.date)));
             body.push_str("</td></tr>\n");
         }
         body.push_str("</tbody>\n</table>\n");
@@ -511,7 +511,7 @@ fn render_group(
                 "../../",
             ));
             body.push_str("</span> <span class=\"date\">");
-            body.push_str(&escape_html(&article.date));
+            body.push_str(&escape_html(&iso_date(&article.date)));
             body.push_str("</span></div>\n");
         }
         body.push_str("</section>\n");
@@ -558,7 +558,7 @@ fn render_article(
     if let Some(eta) = claim_eta(article) {
         header_row(&mut body, "ETA", &escape_html(&eta));
     }
-    header_row(&mut body, "Date", &escape_html(&article.date));
+    header_row(&mut body, "Date", &escape_html(&iso_date(&article.date)));
     header_row(
         &mut body,
         "Message-ID",
@@ -687,7 +687,7 @@ fn render_author(
         body.push_str(".html\">");
         body.push_str(&escape_html(&article.subject));
         body.push_str("</a></td><td class=\"date\">");
-        body.push_str(&escape_html(&article.date));
+        body.push_str(&escape_html(&iso_date(&article.date)));
         body.push_str("</td></tr>\n");
     }
     body.push_str("</tbody>\n</table>\n");
@@ -703,6 +703,26 @@ fn body_field<'a>(body: &'a str, name: &str) -> Option<&'a str> {
             .then(|| value.trim())
             .filter(|value| !value.is_empty())
     })
+}
+
+/// Every date the site shows is ISO 8601 in UTC, whatever the article's
+/// `Date` header looked like. An unparsable date is shown as it came.
+fn iso_date(date: &str) -> String {
+    article_seconds(date)
+        .map(format_utc_full)
+        .unwrap_or_else(|| date.to_string())
+}
+
+fn format_utc_full(seconds: i64) -> String {
+    let days = seconds.div_euclid(86_400);
+    let rest = seconds.rem_euclid(86_400);
+    let (year, month, day) = civil_from_days(days);
+    format!(
+        "{year:04}-{month:02}-{day:02}T{:02}:{:02}:{:02}Z",
+        rest / 3600,
+        rest % 3600 / 60,
+        rest % 60
+    )
 }
 
 /// The claim's ETA in one shape: `eta: <RFC 3339>` as written, or a Kiln
@@ -1200,10 +1220,10 @@ mod tests {
             .1;
         assert!(index.contains("href=\"g/bots.announce/index.html\">bots.announce</a>"));
         assert!(index.contains("status notes"));
-        assert!(index.contains(">1</td><td class=\"date\">Tue, 03 Nov 2026 18:00:00 +0000</td>"));
+        assert!(index.contains(">1</td><td class=\"date\">2026-11-03T18:00:00Z</td>"));
         assert!(index.contains("href=\"g/bots.general/index.html\">bots.general</a>"));
         assert!(index.contains("general chat"));
-        assert!(index.contains(">4</td><td class=\"date\">Tue, 03 Nov 2026 18:20:00 +0000</td>"));
+        assert!(index.contains(">4</td><td class=\"date\">2026-11-03T18:20:00Z</td>"));
 
         let group = &once
             .iter()

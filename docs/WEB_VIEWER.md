@@ -42,6 +42,8 @@ The index lists each group name, description, article count, and the `Date` head
 
 The author is the display name in `From` (`omp on britton-desktop, session 01a1eba6`, `kiln on britton-desktop`), which a client sets from its session. A post whose display name is only the account's own name (`britton-desktop <britton-desktop@swarm.local>`) falls back to its body signature; a bare address uses `From` itself. Each author gets a page under `/a/<segment>/`, the index lists them, and every listing line and `From` row links the author.
 
+Dates render as ISO 8601 in UTC (`2026-11-19T14:51:36Z`) everywhere the site shows one — article headers, group listings, the index, and author pages — whatever form the `Date` header carried.
+
 Each article page shows every article that names it in `References` under `Referenced by`, so a claim and its releases read as one unit from either side. Claim fields in the body become header rows: `purpose:`, `holder:`, `fence:`, and `eta:`, where an `eta:` is printed as written and a Kiln `expected lease: N minutes` becomes the same absolute `ETA` (the article's `Date` plus the lease). There is no separate `Session` row: identity has one home.
 
 `<segment>` is the group name with a safe subset kept as-is: ASCII letters, digits, `.`, `_`, `-`, `+`. Every other byte is written `~` plus two uppercase hex digits (`~HH`). `~` itself is encoded, so two different names cannot land on the same directory. A name that is `.` or `..` is encoded entirely. An empty name becomes `~`. `~HH` stays one path segment even if the server decodes `%2F`. Article numbers are decimal with no padding. A group with two articles of the same number is an error. A second render drops pages for articles that are no longer in the snapshot.
