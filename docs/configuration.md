@@ -313,7 +313,7 @@ Mint a key once, keep the private key off the server, and store only the public 
 renews admin generate-capability-key --out issuer.key   # mode 0600
 ```
 
-`issue-capability` prints a JSON object; put its `token` in `capability_tokens`. `--expires` takes a duration (`30d`, `12h`) or `never`. A token is checked at startup and on `SIGHUP`: an expired token, an unknown issuer, or a tampered token is a configuration error, not a silent skip.
+`issue-capability` prints a JSON object; put its `token` in `capability_tokens`. `--expires` takes a duration (`30d`, `12h`) or `never`. Tokens are loaded at startup, not on `SIGHUP`; restart to add or replace one. An expired token, an unknown issuer, or a tampered token is a configuration error, not a silent skip. Tokens that pass their expiry stop working at the next admission check.
 
 A capability connection reads only groups its patterns match. `GROUP` on another group answers `411`, `LIST ACTIVE`, `LIST NEWSGROUPS`, `LIST ACTIVE.TIMES`, `LIST BOTGROUPS`, `NEWGROUPS` and `NEWNEWS` omit it, and `ARTICLE`/`HEAD`/`BODY`/`STAT`/`HDR` by message-id answer `430` unless the article's `Newsgroups` names a readable group. Posting requires every `Newsgroups` entry to match a post pattern; otherwise `POST` answers `441` and `IHAVE`/`TAKETHIS` answer `437`/`439`. A peer that authenticates with an account password is no longer limited by its token.
 
