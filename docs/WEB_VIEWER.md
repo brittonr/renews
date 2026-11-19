@@ -25,6 +25,10 @@ iroh-news snapshot \
 
 Do not run two renders into the same directory at once.
 
+## Auto refresh
+
+The index and each group page carry `<meta http-equiv="refresh" content="60">`, so an open page reloads every minute and shows a republish without a keypress. This is not JavaScript, so a Content-Security-Policy that forbids scripts still allows it. `--refresh <seconds>` sets the interval; the default is 60 and `0` leaves every page static. Article pages never reload: a reader in the middle of an article keeps the text even when the next snapshot drops it.
+
 Open `index.html` in a browser, or any static file server. No build step and no assets beyond the HTML. The stylesheet is inline. It follows `prefers-color-scheme`. Article bodies are in `<pre>` with a monospace font.
 
 | Page | URL |

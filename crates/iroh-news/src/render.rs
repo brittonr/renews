@@ -47,6 +47,12 @@ pub fn site_replaces_snapshot(snapshot_file: &Path, site_dir: &Path) -> bool {
 /// Site name shown when no other is given: the slime network.
 pub const DEFAULT_SITE_TITLE: &str = "slime";
 
+/// Seconds between automatic reloads when no other is given.
+///
+/// The index and group pages reload so a reader sees new articles without
+/// pressing reload. A republish reaches the open page within a minute.
+pub const DEFAULT_REFRESH_SECONDS: u64 = 60;
+
 /// Write a static HTML site for `snapshot` into `out`.
 ///
 /// Replaces `out` when it already exists. The same snapshot produces the
@@ -54,13 +60,23 @@ pub const DEFAULT_SITE_TITLE: &str = "slime";
 /// heads the index and ends each group page's title. Each group is a
 /// directory `g/<segment>/`, and each article is `g/<segment>/<number>.html`.
 ///
+/// A nonzero `refresh_seconds` makes the index and group pages reload that
+/// often, through a `<meta http-equiv="refresh">`, because those pages list
+/// what a republish changes. Article pages stay put: a reload would yank an
+/// article the reader is in. `0` leaves every page static.
+///
 /// # Errors
 ///
 /// Returns an error when the snapshot version is not [`SNAPSHOT_VERSION`],
 /// two articles in one group share a number, two groups would use the same
 /// directory, a group name cannot be a path segment, or the directory
 /// cannot be written.
-pub fn render_site(snapshot: &Snapshot, out: &Path, title: &str) -> anyhow::Result<RenderedSite> {
+pub fn render_site(
+    snapshot: &Snapshot,
+    out: &Path,
+    title: &str,
+    refresh_seconds: u64,
+) -> anyhow::Result<RenderedSite> {
     if snapshot.version != SNAPSHOT_VERSION {
         bail!("refusing to render snapshot version {}", snapshot.version);
     }
@@ -77,7 +93,7 @@ pub fn render_site(snapshot: &Snapshot, out: &Path, title: &str) -> anyhow::Resu
 
     remove_path(&staging)?;
     fs::create_dir_all(&staging).with_context(|| format!("creating {}", staging.display()))?;
-    let written = match write_tree(snapshot, &staging, title) {
+    let written = match write_tree(snapshot, &staging, title, refresh_seconds) {
         Ok(written) => written,
         Err(err) => {
             let _ = remove_path(&staging);
@@ -111,7 +127,12 @@ struct Written {
     files: usize,
 }
 
-fn write_tree(snapshot: &Snapshot, root: &Path, title: &str) -> anyhow::Result<Written> {
+fn write_tree(
+    snapshot: &Snapshot,
+    root: &Path,
+    title: &str,
+    refresh_seconds: u64,
+) -> anyhow::Result<Written> {
     let mut segments = Vec::with_capacity(snapshot.groups.len());
     let mut used: HashMap<String, &str> = HashMap::new();
     for group in &snapshot.groups {
@@ -137,7 +158,7 @@ fn write_tree(snapshot: &Snapshot, root: &Path, title: &str) -> anyhow::Result<W
 
     fs::write(
         root.join("index.html"),
-        render_index(snapshot, &segments, title),
+        render_index(snapshot, &segments, title, refresh_seconds),
     )
     .with_context(|| format!("writing {}", root.join("index.html").display()))?;
 
@@ -148,8 +169,11 @@ fn write_tree(snapshot: &Snapshot, root: &Path, title: &str) -> anyhow::Result<W
         fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
         let by_id = message_index(group);
         let index_path = dir.join("index.html");
-        fs::write(&index_path, render_group(snapshot, group, title))
-            .with_context(|| format!("writing {}", index_path.display()))?;
+        fs::write(
+            &index_path,
+            render_group(snapshot, group, title, refresh_seconds),
+        )
+        .with_context(|| format!("writing {}", index_path.display()))?;
         files += 1;
         for article in articles_of(group) {
             let path = dir.join(format!("{}.html", article.number));
@@ -198,7 +222,12 @@ fn latest_date(group: &SnapshotGroup) -> &str {
         .unwrap_or("")
 }
 
-fn render_index(snapshot: &Snapshot, segments: &[String], title: &str) -> String {
+fn render_index(
+    snapshot: &Snapshot,
+    segments: &[String],
+    title: &str,
+    refresh_seconds: u64,
+) -> String {
     let mut body = format!(
         "<h1>{}</h1>\n<p class=\"lead\">Read-only newsgroups.</p>\n",
         escape_html(title)
@@ -231,10 +260,15 @@ fn render_index(snapshot: &Snapshot, segments: &[String], title: &str) -> String
         }
         body.push_str("</tbody>\n</table>\n");
     }
-    page(snapshot, title, &body)
+    page(snapshot, title, &body, refresh_seconds)
 }
 
-fn render_group(snapshot: &Snapshot, group: &SnapshotGroup, title: &str) -> String {
+fn render_group(
+    snapshot: &Snapshot,
+    group: &SnapshotGroup,
+    title: &str,
+    refresh_seconds: u64,
+) -> String {
     let mut body =
         String::from("<p class=\"crumb\"><a href=\"../../index.html\">groups</a></p>\n<h1>");
     body.push_str(&escape_html(&group.name));
@@ -282,7 +316,7 @@ fn render_group(snapshot: &Snapshot, group: &SnapshotGroup, title: &str) -> Stri
         body.push_str("</section>\n");
     }
     let title = format!("{} — {title}", group.name);
-    page(snapshot, &title, &body)
+    page(snapshot, &title, &body, refresh_seconds)
 }
 
 fn render_article(
@@ -324,7 +358,8 @@ fn render_article(
     body.push_str(&escape_html(&article.body));
     body.push_str("</pre>\n");
     let title = format!("{} — {}", article.subject, group.name);
-    page(snapshot, &title, &body)
+    // No reload while someone reads: the article may leave the next snapshot.
+    page(snapshot, &title, &body, 0)
 }
 
 fn linked_id(id: &str, by_id: &HashMap<&str, u64>) -> String {
@@ -343,12 +378,17 @@ fn header_row(out: &mut String, name: &str, html_value: &str) {
     out.push_str("</dd>\n");
 }
 
-fn page(snapshot: &Snapshot, title: &str, body: &str) -> String {
+fn page(snapshot: &Snapshot, title: &str, body: &str, refresh_seconds: u64) -> String {
     let mut out = String::new();
     out.push_str("<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n");
     out.push_str("<meta charset=\"utf-8\">\n");
     out.push_str("<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n");
     out.push_str("<meta name=\"robots\" content=\"noindex\">\n");
+    if refresh_seconds > 0 {
+        out.push_str("<meta http-equiv=\"refresh\" content=\"");
+        out.push_str(&refresh_seconds.to_string());
+        out.push_str("\">\n");
+    }
     out.push_str("<title>");
     out.push_str(&escape_html(title));
     out.push_str("</title>\n<style>\n");
@@ -676,12 +716,14 @@ mod tests {
         let snapshot = example();
         let dir = tempfile::tempdir().unwrap();
         let out = dir.path().join("site");
-        let first = render_site(&snapshot, &out, DEFAULT_SITE_TITLE).unwrap();
+        let first =
+            render_site(&snapshot, &out, DEFAULT_SITE_TITLE, DEFAULT_REFRESH_SECONDS).unwrap();
         assert_eq!(first.groups, 2);
         assert_eq!(first.articles, 5);
         assert_eq!(first.files, 1 + 2 + 5);
         let once = files_under(&out);
-        let twice = render_site(&snapshot, &out, DEFAULT_SITE_TITLE).unwrap();
+        let twice =
+            render_site(&snapshot, &out, DEFAULT_SITE_TITLE, DEFAULT_REFRESH_SECONDS).unwrap();
         assert_eq!(twice.files, first.files);
         assert_eq!(once, files_under(&out));
         assert!(once.iter().all(|(_, html)| html.contains(FOOTER)));
@@ -768,7 +810,7 @@ mod tests {
 
         let dir = tempfile::tempdir().unwrap();
         let out = dir.path().join("site");
-        render_site(&snapshot, &out, DEFAULT_SITE_TITLE).unwrap();
+        render_site(&snapshot, &out, DEFAULT_SITE_TITLE, DEFAULT_REFRESH_SECONDS).unwrap();
         assert_pages_are_static(&out);
 
         let pages = files_under(&out);
@@ -826,13 +868,14 @@ mod tests {
         snapshot.groups[1].threads[0].articles[2].depth = 100;
         let dir = tempfile::tempdir().unwrap();
         let out = dir.path().join("site");
-        render_site(&snapshot, &out, DEFAULT_SITE_TITLE).unwrap();
+        render_site(&snapshot, &out, DEFAULT_SITE_TITLE, DEFAULT_REFRESH_SECONDS).unwrap();
         let group = fs::read_to_string(out.join("g/bots.general/index.html")).unwrap();
         assert!(group.contains("style=\"margin-left: 32em\""));
         assert!(!group.contains("margin-left: 100em"));
 
         snapshot.groups[1].threads[1].articles[0].number = 1;
-        let err = render_site(&snapshot, &out, DEFAULT_SITE_TITLE).unwrap_err();
+        let err =
+            render_site(&snapshot, &out, DEFAULT_SITE_TITLE, DEFAULT_REFRESH_SECONDS).unwrap_err();
         assert!(err.to_string().contains("two articles numbered 1"));
     }
 
@@ -841,12 +884,12 @@ mod tests {
         let snapshot = example();
         let dir = tempfile::tempdir().unwrap();
         let out = dir.path().join("site");
-        render_site(&snapshot, &out, DEFAULT_SITE_TITLE).unwrap();
+        render_site(&snapshot, &out, DEFAULT_SITE_TITLE, DEFAULT_REFRESH_SECONDS).unwrap();
         assert!(out.join("g/bots.general/5.html").is_file());
 
         let mut smaller = snapshot.clone();
         smaller.groups.pop();
-        render_site(&smaller, &out, DEFAULT_SITE_TITLE).unwrap();
+        render_site(&smaller, &out, DEFAULT_SITE_TITLE, DEFAULT_REFRESH_SECONDS).unwrap();
         assert!(out.join("g/bots.announce/1.html").is_file());
         assert!(!out.join("g/bots.general").exists());
         assert!(!dir.path().join(".site.rendering").exists());
@@ -858,7 +901,13 @@ mod tests {
         let mut snapshot = example();
         snapshot.version = 2;
         let dir = tempfile::tempdir().unwrap();
-        let err = render_site(&snapshot, &dir.path().join("site"), DEFAULT_SITE_TITLE).unwrap_err();
+        let err = render_site(
+            &snapshot,
+            &dir.path().join("site"),
+            DEFAULT_SITE_TITLE,
+            DEFAULT_REFRESH_SECONDS,
+        )
+        .unwrap_err();
         assert!(err.to_string().contains("version 2"));
 
         let snap = dir.path().join("snapshot.json");
@@ -877,7 +926,8 @@ mod tests {
         snapshot.groups.clear();
         let dir = tempfile::tempdir().unwrap();
         let out = dir.path().join("site");
-        let rendered = render_site(&snapshot, &out, DEFAULT_SITE_TITLE).unwrap();
+        let rendered =
+            render_site(&snapshot, &out, DEFAULT_SITE_TITLE, DEFAULT_REFRESH_SECONDS).unwrap();
         assert_eq!(rendered.files, 1);
         assert_eq!(rendered.articles, 0);
         let index = fs::read_to_string(out.join("index.html")).unwrap();
@@ -887,11 +937,39 @@ mod tests {
     }
 
     #[test]
+    fn listing_pages_reload_and_article_pages_do_not() {
+        let snapshot = example();
+        let dir = tempfile::tempdir().unwrap();
+        let out = dir.path().join("site");
+        render_site(&snapshot, &out, DEFAULT_SITE_TITLE, 30).unwrap();
+        let meta = "<meta http-equiv=\"refresh\" content=\"30\">\n";
+        let index = fs::read_to_string(out.join("index.html")).unwrap();
+        assert!(index.contains(meta), "{index}");
+        let group = fs::read_to_string(out.join("g/bots.general/index.html")).unwrap();
+        assert!(group.contains(meta), "{group}");
+        let article = fs::read_to_string(out.join("g/bots.general/3.html")).unwrap();
+        assert!(!article.contains("http-equiv=\"refresh\""), "{article}");
+        assert_pages_are_static(&out);
+    }
+
+    #[test]
+    fn zero_refresh_leaves_every_page_static() {
+        let snapshot = example();
+        let dir = tempfile::tempdir().unwrap();
+        let out = dir.path().join("site");
+        render_site(&snapshot, &out, DEFAULT_SITE_TITLE, 0).unwrap();
+        for (rel, html) in files_under(&out) {
+            assert!(!html.contains("http-equiv=\"refresh\""), "{rel}");
+        }
+        assert_pages_are_static(&out);
+    }
+
+    #[test]
     fn the_site_title_heads_the_index_and_group_pages_escaped() {
         let snapshot = example();
         let dir = tempfile::tempdir().unwrap();
         let out = dir.path().join("site");
-        render_site(&snapshot, &out, "swarm <&>").unwrap();
+        render_site(&snapshot, &out, "swarm <&>", DEFAULT_REFRESH_SECONDS).unwrap();
         let index = fs::read_to_string(out.join("index.html")).unwrap();
         assert!(index.contains("<title>swarm &lt;&amp;&gt;</title>"));
         assert!(index.contains("<h1>swarm &lt;&amp;&gt;</h1>"));

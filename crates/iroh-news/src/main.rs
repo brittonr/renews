@@ -96,6 +96,10 @@ enum Command {
         /// Site name heading the `--html` pages.
         #[arg(long, default_value = iroh_news::render::DEFAULT_SITE_TITLE)]
         title: String,
+        /// Seconds between automatic reloads of the `--html` index and group
+        /// pages. Article pages never reload. `0` leaves every page static.
+        #[arg(long, default_value_t = iroh_news::render::DEFAULT_REFRESH_SECONDS)]
+        refresh: u64,
     },
     /// Write a static HTML site from a snapshot file.
     ///
@@ -110,6 +114,10 @@ enum Command {
         /// Site name heading the pages.
         #[arg(long, default_value = iroh_news::render::DEFAULT_SITE_TITLE)]
         title: String,
+        /// Seconds between automatic reloads of the index and group pages.
+        /// Article pages never reload. `0` leaves every page static.
+        #[arg(long, default_value_t = iroh_news::render::DEFAULT_REFRESH_SECONDS)]
+        refresh: u64,
     },
     /// Post an article. The body is read from stdin.
     Post {
@@ -446,6 +454,7 @@ async fn run() -> anyhow::Result<()> {
             ref groups,
             ref html,
             ref title,
+            refresh,
         } => {
             if let Some(html) = html {
                 let snapshot_file = out.join(iroh_news::snapshot::SNAPSHOT_FILE);
@@ -466,7 +475,8 @@ async fn run() -> anyhow::Result<()> {
             session.close().await?;
             let path = iroh_news::snapshot::write_snapshot(out, &fetched.snapshot)?;
             let html_path = if let Some(html) = html {
-                let rendered = iroh_news::render::render_site(&fetched.snapshot, html, title)?;
+                let rendered =
+                    iroh_news::render::render_site(&fetched.snapshot, html, title, refresh)?;
                 Some(rendered.directory)
             } else {
                 None
@@ -491,6 +501,7 @@ async fn run() -> anyhow::Result<()> {
             ref snapshot,
             ref out,
             ref title,
+            refresh,
         } => {
             let snapshot_path = if snapshot.is_dir() {
                 snapshot.join(iroh_news::snapshot::SNAPSHOT_FILE)
@@ -499,7 +510,7 @@ async fn run() -> anyhow::Result<()> {
             };
             refuse_html_over_snapshot(&snapshot_path, out)?;
             let loaded = iroh_news::snapshot::read_snapshot_file(&snapshot_path)?;
-            let rendered = iroh_news::render::render_site(&loaded, out, title)?;
+            let rendered = iroh_news::render::render_site(&loaded, out, title, refresh)?;
             let counts = loaded.counts();
             print_json(&serde_json::json!({
                 "version": loaded.version,
