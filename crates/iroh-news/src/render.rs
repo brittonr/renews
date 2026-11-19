@@ -8,13 +8,14 @@
 //! safe in a path are written as `~HH`, which stays one segment after a
 //! URL decode.
 
+use std::cmp::Reverse;
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 
 use anyhow::{Context, bail};
 
-use crate::snapshot::{SNAPSHOT_VERSION, Snapshot, SnapshotArticle, SnapshotGroup};
+use crate::snapshot::{SNAPSHOT_VERSION, Snapshot, SnapshotArticle, SnapshotGroup, SnapshotThread};
 
 /// How far a reply is indented. Deeper articles stay at this margin.
 const MAX_INDENT_EM: u32 = 32;
@@ -207,6 +208,16 @@ fn message_index(group: &SnapshotGroup) -> HashMap<&str, u64> {
     map
 }
 
+/// Highest article number in a thread: when the thread's newest article arrived.
+fn thread_newest(thread: &SnapshotThread) -> u64 {
+    thread
+        .articles
+        .iter()
+        .map(|article| article.number)
+        .max()
+        .unwrap_or(0)
+}
+
 fn article_count(group: &SnapshotGroup) -> usize {
     group
         .threads
@@ -297,7 +308,9 @@ fn render_group(
     if count == 0 {
         body.push_str("<p>No articles.</p>\n");
     }
-    for thread in &group.threads {
+    let mut threads: Vec<&SnapshotThread> = group.threads.iter().collect();
+    threads.sort_by_key(|thread| Reverse(thread_newest(thread)));
+    for thread in threads {
         body.push_str("<section class=\"thread\">\n");
         for article in &thread.articles {
             let indent = article.depth.min(MAX_INDENT_EM);
@@ -308,7 +321,7 @@ fn render_group(
             body.push_str(".html\">");
             body.push_str(&escape_html(&article.subject));
             body.push_str("</a> <span class=\"from\">");
-            body.push_str(&escape_html(&article.from));
+            body.push_str(&escape_html(author_label(article)));
             body.push_str("</span> <span class=\"date\">");
             body.push_str(&escape_html(&article.date));
             body.push_str("</span></div>\n");
@@ -333,6 +346,9 @@ fn render_article(
     body.push_str(&escape_html(&article.subject));
     body.push_str("</h1>\n<dl class=\"headers\">\n");
     header_row(&mut body, "From", &escape_html(&article.from));
+    if let Some(session) = signature_line(&article.body) {
+        header_row(&mut body, "Session", &escape_html(session));
+    }
     header_row(&mut body, "Date", &escape_html(&article.date));
     header_row(
         &mut body,
@@ -360,6 +376,21 @@ fn render_article(
     let title = format!("{} — {}", article.subject, group.name);
     // No reload while someone reads: the article may leave the next snapshot.
     page(snapshot, &title, &body, 0)
+}
+
+/// The poster's own identity line: the last non-empty line of the body when it
+/// is a signature (`— omp on britton-desktop, session 01a1eba6`).
+///
+/// Every agent on a machine posts under the machine's account, so `from` names
+/// the host and this names the session that wrote the article.
+fn signature_line(body: &str) -> Option<&str> {
+    let line = body.lines().rev().find(|line| !line.trim().is_empty())?;
+    let rest = line.trim().strip_prefix('\u{2014}')?.trim();
+    (!rest.is_empty()).then_some(rest)
+}
+
+fn author_label(article: &SnapshotArticle) -> &str {
+    signature_line(&article.body).unwrap_or(&article.from)
 }
 
 fn linked_id(id: &str, by_id: &HashMap<&str, u64>) -> String {
@@ -771,7 +802,9 @@ mod tests {
         let reply = group.find("margin-left: 1em").unwrap();
         let nested = group.find("margin-left: 2em").unwrap();
         let other = group.find("other topic").unwrap();
-        assert!(picnic < reply && reply < nested && nested < other);
+        // Newest thread first: number 5 is its own thread, above the picnic
+        // thread whose newest article is number 4.
+        assert!(other < picnic && picnic < reply && reply < nested);
 
         let article = &once
             .iter()
@@ -961,6 +994,48 @@ mod tests {
         for (rel, html) in files_under(&out) {
             assert!(!html.contains("http-equiv=\"refresh\""), "{rel}");
         }
+        assert_pages_are_static(&out);
+    }
+
+    #[test]
+    fn a_signature_names_the_session_in_the_listing_and_the_article() {
+        let mut snapshot = example();
+        let article = &mut snapshot.groups[1].threads[0].articles[1];
+        article.body = format!(
+            "{}\n\n\u{2014} omp on britton-desktop, session <abc&>\n",
+            article.body.trim_end()
+        );
+        let dir = tempfile::tempdir().unwrap();
+        let out = dir.path().join("site");
+        render_site(&snapshot, &out, DEFAULT_SITE_TITLE, DEFAULT_REFRESH_SECONDS).unwrap();
+
+        let group = fs::read_to_string(out.join("g/bots.general/index.html")).unwrap();
+        assert!(
+            group.contains(
+                "Re: picnic</a> <span class=\"from\">omp on britton-desktop, session &lt;abc&amp;&gt;</span>"
+            ),
+            "{group}"
+        );
+        // Unsigned articles keep the machine account.
+        assert!(
+            group
+                .contains("other topic</a> <span class=\"from\">Cal &lt;cal@bots.local&gt;</span>")
+        );
+
+        let page = fs::read_to_string(out.join("g/bots.general/3.html")).unwrap();
+        assert!(
+            page.contains(
+                "<dt>Session</dt><dd>omp on britton-desktop, session &lt;abc&amp;&gt;</dd>"
+            ),
+            "{page}"
+        );
+        // The From header stays the header the article carried.
+        assert!(page.contains("<dt>From</dt><dd>Bea &lt;bea@bots.local&gt;</dd>"));
+        let unsigned = &mut snapshot;
+        unsigned.groups[1].threads[0].articles[1].body = "I&#39;ll bring bread.\n".to_string();
+        render_site(unsigned, &out, DEFAULT_SITE_TITLE, DEFAULT_REFRESH_SECONDS).unwrap();
+        let page = fs::read_to_string(out.join("g/bots.general/3.html")).unwrap();
+        assert!(!page.contains("<dt>Session</dt>"), "{page}");
         assert_pages_are_static(&out);
     }
 
