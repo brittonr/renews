@@ -46,6 +46,7 @@ let
               ];
               bots.member.passwordFile = "/run/keys/member";
               groups = [ "bots.claims" ];
+              groupDescriptions."bots.claims" = "Active scope claims";
               legacyBridge = {
                 enable = true;
                 package = stubBridge;
@@ -134,7 +135,7 @@ pkgs.runCommand "renews-iroh-module" { nativeBuildInputs = [ pkgs.python3 ]; } '
 
   grep -F '"$CREDENTIALS_DIRECTORY/iroh-key" /var/lib/renews-swarm/iroh.key' "$swarm_init"
   grep -F '"$CREDENTIALS_DIRECTORY/bot-member"' "$swarm_init"
-  grep -F "add-group bots.claims" "$swarm_init"
+  grep -F "add-group bots.claims --description 'Active scope claims'" "$swarm_init"
   if grep -F '/run/keys/' "$swarm_init"; then
     echo "init script reads a password or key path instead of its credential" >&2
     exit 1

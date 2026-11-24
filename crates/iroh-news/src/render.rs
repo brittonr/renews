@@ -23,6 +23,12 @@ const MAX_INDENT_EM: u32 = 32;
 /// Longest sanitized group segment, in bytes. Leaves room for `index.html`.
 const MAX_SEGMENT_BYTES: usize = 200;
 
+/// Maximum number of authors shown on the root index page before linking to `a/index.html`.
+const INDEX_AUTHORS_LIMIT: usize = 25;
+
+/// Name of the claim-tracking newsgroup that gets an Open Claims dashboard.
+const CLAIMS_GROUP_NAME: &str = "bots.claims";
+
 /// What [`render_site`] wrote.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RenderedSite {
@@ -169,23 +175,57 @@ fn write_tree(
         .map(|author| (author.name.as_str(), author.segment.as_str()))
         .collect();
     let backlinks = collect_backlinks(snapshot);
+    let claims_group = snapshot
+        .groups
+        .iter()
+        .find(|group| group.name == CLAIMS_GROUP_NAME);
+    let open_claims = claims_group.map(|group| collect_open_claims(snapshot, group));
 
     fs::write(
         root.join("index.html"),
-        render_index(snapshot, &segments, title, refresh_seconds, &authors),
+        render_index(
+            snapshot,
+            &segments,
+            title,
+            refresh_seconds,
+            &authors,
+            &author_segments,
+            open_claims.as_deref(),
+        ),
     )
     .with_context(|| format!("writing {}", root.join("index.html").display()))?;
 
     let mut files = 1usize;
     let mut articles = 0usize;
+    if let Some(open) = open_claims.as_deref() {
+        let claims_path = root.join("claims.html");
+        fs::write(
+            &claims_path,
+            render_claims_page(snapshot, title, refresh_seconds, open, &author_segments),
+        )
+        .with_context(|| format!("writing {}", claims_path.display()))?;
+        files += 1;
+    }
     for (group, segment) in snapshot.groups.iter().zip(segments.iter()) {
         let dir = join_segment(&root.join("g"), segment)?;
         fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
         let by_id = message_index(group);
         let index_path = dir.join("index.html");
+        let group_open_count = if group.name == CLAIMS_GROUP_NAME {
+            open_claims.as_ref().map(Vec::len)
+        } else {
+            None
+        };
         fs::write(
             &index_path,
-            render_group(snapshot, group, title, refresh_seconds, &author_segments),
+            render_group(
+                snapshot,
+                group,
+                title,
+                refresh_seconds,
+                &author_segments,
+                group_open_count,
+            ),
         )
         .with_context(|| format!("writing {}", index_path.display()))?;
         files += 1;
@@ -210,6 +250,17 @@ fn write_tree(
     }
 
     let authors_dir = root.join("a");
+    if !authors.is_empty() {
+        fs::create_dir_all(&authors_dir)
+            .with_context(|| format!("creating {}", authors_dir.display()))?;
+        let authors_index = authors_dir.join("index.html");
+        fs::write(
+            &authors_index,
+            render_authors_index(snapshot, title, &authors, refresh_seconds),
+        )
+        .with_context(|| format!("writing {}", authors_index.display()))?;
+        files += 1;
+    }
     for author in &authors {
         let dir = join_segment(&authors_dir, &author.segment)?;
         fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
@@ -276,44 +327,93 @@ fn collect_authors<'a>(snapshot: &'a Snapshot) -> anyhow::Result<Vec<Author<'a>>
     Ok(authors)
 }
 
-/// Sortable stamp for an RFC 2822 date. `0` when the date does not parse, so
-/// it sorts last. Only the advertised fields matter; the zone is ignored
-/// because the swarm's articles are UTC.
-fn newest_key(date: &str) -> u64 {
-    const MONTHS: [&str; 12] = [
-        "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
-    ];
-    let tokens: Vec<&str> = date.split_whitespace().collect();
-    let Some(index) = tokens.iter().position(|token| MONTHS.contains(token)) else {
-        return 0;
-    };
-    if index == 0 {
-        return 0;
+/// Sortable UTC timestamp for an RFC 2822 date. `i64::MIN` when the date does
+/// not parse, so it sorts last.
+fn newest_key(date: &str) -> i64 {
+    article_seconds(date).unwrap_or(i64::MIN)
+}
+
+/// One open claim extracted from `bots.claims`.
+struct OpenClaim<'a> {
+    article: &'a SnapshotArticle,
+    scope: &'a str,
+    holder: &'a str,
+    purpose: Option<&'a str>,
+    eta: Option<String>,
+    overdue: bool,
+    stale: bool,
+}
+
+/// Extract open `CLAIM ` articles from `group`, newest first.
+///
+/// A claim is closed when:
+/// - any `RELEASE ` article references its `Message-ID`,
+/// - any `RELEASE ` article carries the same Kiln `fence:` number, or
+/// - another `CLAIM ` article carries `supersedes: <message-id>`.
+fn collect_open_claims<'a>(snapshot: &Snapshot, group: &'a SnapshotGroup) -> Vec<OpenClaim<'a>> {
+    let mut closed_ids: HashSet<&str> = HashSet::new();
+    let mut closed_fences: HashSet<&str> = HashSet::new();
+    for article in articles_of(group) {
+        if article.subject.starts_with("RELEASE ") {
+            for reference in &article.references {
+                closed_ids.insert(reference.as_str());
+            }
+            if let Some(fence) = body_field(&article.body, "fence") {
+                closed_fences.insert(fence);
+            }
+        } else if article.subject.starts_with("CLAIM ")
+            && let Some(superseded) = body_field(&article.body, "supersedes")
+            && superseded.starts_with('<')
+            && superseded.ends_with('>')
+        {
+            closed_ids.insert(superseded);
+        }
     }
-    let (Some(day), Some(year)) = (
-        tokens[index - 1].parse::<u64>().ok(),
-        tokens
-            .get(index + 1)
-            .and_then(|year| year.parse::<u64>().ok()),
-    ) else {
-        return 0;
-    };
-    let (hour, minute, second) = tokens
-        .get(index + 2)
-        .and_then(|time| {
-            let mut parts = time.split(':');
-            Some((
-                parts.next()?.parse::<u64>().ok()?,
-                parts.next()?.parse::<u64>().ok()?,
-                parts
-                    .next()
-                    .and_then(|s| s.parse::<u64>().ok())
-                    .unwrap_or(0),
-            ))
+
+    let now_seconds = rfc3339_seconds(&snapshot.generated_at);
+    let mut open: Vec<OpenClaim<'a>> = articles_of(group)
+        .filter_map(|article| {
+            let scope = article.subject.strip_prefix("CLAIM ")?.trim();
+            if scope.is_empty() || closed_ids.contains(article.message_id.as_str()) {
+                return None;
+            }
+            if let Some(fence) = body_field(&article.body, "fence")
+                && closed_fences.contains(fence)
+            {
+                return None;
+            }
+            let eta_secs = claim_eta_seconds(article);
+            let eta = eta_secs.map(format_utc);
+            let overdue = match (eta_secs, now_seconds) {
+                (Some(e), Some(now)) => e < now,
+                _ => false,
+            };
+            let stale = match (article_seconds(&article.date), now_seconds) {
+                (Some(posted), Some(now)) => now.saturating_sub(posted) >= 24 * 3600,
+                _ => false,
+            };
+            let holder =
+                body_field(&article.body, "holder").unwrap_or_else(|| author_label(article));
+            let purpose = body_field(&article.body, "purpose");
+            Some(OpenClaim {
+                article,
+                scope,
+                holder,
+                purpose,
+                eta,
+                overdue,
+                stale,
+            })
         })
-        .unwrap_or((0, 0, 0));
-    let month = index as u64;
-    year * 100_000_000 + month * 1_000_000 + day * 10_000 + hour * 100 + minute + second / 60
+        .collect();
+    open.sort_by(|left, right| {
+        right
+            .article
+            .number
+            .cmp(&left.article.number)
+            .then_with(|| newest_key(&right.article.date).cmp(&newest_key(&left.article.date)))
+    });
+    open
 }
 
 /// Articles that name this one in `References`, keyed by message-id.
@@ -388,6 +488,8 @@ fn render_index(
     title: &str,
     refresh_seconds: u64,
     authors: &[Author<'_>],
+    author_segments: &HashMap<&str, &str>,
+    open_claims: Option<&[OpenClaim<'_>]>,
 ) -> String {
     let mut body = format!(
         "<h1>{}</h1>\n<p class=\"lead\">Read-only newsgroups.</p>\n",
@@ -421,9 +523,28 @@ fn render_index(
         }
         body.push_str("</tbody>\n</table>\n");
     }
+    if let Some(open) = open_claims {
+        let active: Vec<&OpenClaim<'_>> = open.iter().filter(|claim| !claim.stale).collect();
+        body.push_str("<h2><a href=\"claims.html\">Open claims</a></h2>\n");
+        if active.is_empty() && open.is_empty() {
+            body.push_str("<p class=\"meta\">No open claims.</p>\n");
+        } else {
+            if !active.is_empty() {
+                render_claims_table(&mut body, &active, author_segments, "");
+            }
+            if active.len() < open.len() {
+                let stale_count = open.len() - active.len();
+                body.push_str(&format!(
+                    "<p class=\"meta\">Showing {} active (&lt;24h) · {stale_count} stale · <a href=\"claims.html\">all {} open claims</a></p>\n",
+                    active.len(),
+                    open.len()
+                ));
+            }
+        }
+    }
     if !authors.is_empty() {
         body.push_str("<h2>Agents</h2>\n<table>\n<thead>\n<tr><th>Author</th><th>Articles</th><th>Latest</th></tr>\n</thead>\n<tbody>\n");
-        for author in authors {
+        for author in authors.iter().take(INDEX_AUTHORS_LIMIT) {
             body.push_str("<tr><td><a href=\"a/");
             body.push_str(&escape_html(&author.segment));
             body.push_str("/index.html\">");
@@ -435,8 +556,119 @@ fn render_index(
             body.push_str("</td></tr>\n");
         }
         body.push_str("</tbody>\n</table>\n");
+        if authors.len() > INDEX_AUTHORS_LIMIT {
+            body.push_str(&format!(
+                "<p class=\"meta\">Showing {INDEX_AUTHORS_LIMIT} of {} authors · <a href=\"a/index.html\">all authors</a></p>\n",
+                authors.len()
+            ));
+        } else {
+            body.push_str("<p class=\"meta\"><a href=\"a/index.html\">all authors</a></p>\n");
+        }
     }
     page(snapshot, title, &body, refresh_seconds)
+}
+
+fn render_claims_table(
+    body: &mut String,
+    open: &[&OpenClaim<'_>],
+    author_segments: &HashMap<&str, &str>,
+    prefix: &str,
+) {
+    body.push_str(
+        "<table>\n<thead>\n<tr><th>Scope</th><th>Holder</th><th>ETA</th><th>Purpose</th></tr>\n</thead>\n<tbody>\n",
+    );
+    for claim in open {
+        body.push_str("<tr><td><a href=\"");
+        body.push_str(prefix);
+        body.push_str("g/bots.claims/");
+        body.push_str(&claim.article.number.to_string());
+        body.push_str(".html\"><code>");
+        body.push_str(&escape_html(claim.scope));
+        body.push_str("</code></a></td><td>");
+        body.push_str(&author_html(
+            author_label(claim.article),
+            claim.holder,
+            author_segments,
+            prefix,
+        ));
+        body.push_str("</td><td class=\"date\">");
+        if let Some(eta) = &claim.eta {
+            body.push_str(&escape_html(eta));
+        } else {
+            body.push('—');
+        }
+        if claim.overdue {
+            body.push_str(" <span class=\"warn\">OVERDUE</span>");
+        }
+        if claim.stale {
+            body.push_str(" <span class=\"warn\">STALE</span>");
+        }
+        body.push_str("</td><td>");
+        if let Some(purpose) = claim.purpose {
+            body.push_str(&escape_html(purpose));
+        }
+        body.push_str("</td></tr>\n");
+    }
+    body.push_str("</tbody>\n</table>\n");
+}
+
+fn render_claims_page(
+    snapshot: &Snapshot,
+    title: &str,
+    refresh_seconds: u64,
+    open: &[OpenClaim<'_>],
+    author_segments: &HashMap<&str, &str>,
+) -> String {
+    let mut body = String::from(
+        "<p class=\"crumb\"><a href=\"index.html\">groups</a> / <a href=\"g/bots.claims/index.html\">bots.claims</a></p>\n<h1>Open claims</h1>\n",
+    );
+    let noun = if open.len() == 1 { "claim" } else { "claims" };
+    body.push_str(&format!(
+        "<p class=\"meta\">{} open {noun}</p>\n",
+        open.len()
+    ));
+    if open.is_empty() {
+        body.push_str("<p>No open claims.</p>\n");
+    } else {
+        let refs: Vec<&OpenClaim<'_>> = open.iter().collect();
+        render_claims_table(&mut body, &refs, author_segments, "");
+    }
+    let page_title = format!("Open claims — {title}");
+    page(snapshot, &page_title, &body, refresh_seconds)
+}
+
+fn render_authors_index(
+    snapshot: &Snapshot,
+    title: &str,
+    authors: &[Author<'_>],
+    refresh_seconds: u64,
+) -> String {
+    let mut body = String::from(
+        "<p class=\"crumb\"><a href=\"../index.html\">groups</a></p>\n<h1>Agents</h1>\n",
+    );
+    let noun = if authors.len() == 1 {
+        "author"
+    } else {
+        "authors"
+    };
+    body.push_str(&format!("<p class=\"meta\">{} {noun}</p>\n", authors.len()));
+    body.push_str(
+        "<table>\n<thead>\n<tr><th>Author</th><th>Articles</th><th>Latest</th></tr>\n</thead>\n<tbody>\n",
+    );
+    for author in authors {
+        body.push_str("<tr><td><a href=\"");
+        body.push_str(&escape_html(&author.segment));
+        body.push_str("/index.html\">");
+        body.push_str(&escape_html(&author.name));
+        body.push_str("</a></td><td class=\"num\">");
+        body.push_str(&author.articles.len().to_string());
+        body.push_str("</td><td class=\"date\">");
+        body.push_str(&escape_html(&iso_date(&author.articles[0].1.date)));
+        body.push_str("</td></tr>\n");
+    }
+    body.push_str("</tbody>\n</table>\n");
+    let page_title = format!("Agents — {title}");
+    page(snapshot, &page_title, &body, refresh_seconds)
 }
 
 /// Link `text` to the author page for `label`, or escape it when the article
@@ -462,6 +694,7 @@ fn render_group(
     title: &str,
     refresh_seconds: u64,
     author_segments: &HashMap<&str, &str>,
+    open_claims_count: Option<usize>,
 ) -> String {
     let mut body =
         String::from("<p class=\"crumb\"><a href=\"../../index.html\">groups</a></p>\n<h1>");
@@ -485,6 +718,11 @@ fn render_group(
     if !group.creator.is_empty() {
         body.push_str(" · ");
         body.push_str(&escape_html(&group.creator));
+    }
+    if let Some(open) = open_claims_count {
+        body.push_str(&format!(
+            " · <a href=\"../../claims.html\">{open} open claims</a>"
+        ));
     }
     body.push_str("</p>\n");
 
@@ -725,19 +963,38 @@ fn format_utc_full(seconds: i64) -> String {
     )
 }
 
-/// The claim's ETA in one shape: `eta: <RFC 3339>` as written, or a Kiln
-/// `expected lease: N minutes` added to the article's Date.
-fn claim_eta(article: &SnapshotArticle) -> Option<String> {
+/// The claim's ETA as UTC epoch seconds, from `eta: <RFC 3339>` or a Kiln
+/// `expected lease: N minutes` line added to the article's Date.
+fn claim_eta_seconds(article: &SnapshotArticle) -> Option<i64> {
     if let Some(eta) = body_field(&article.body, "eta") {
         let eta = eta.trim_end_matches('>').trim_start_matches('<');
-        return rfc3339_seconds(eta).map(format_utc);
+        return rfc3339_seconds(eta);
+    }
+    // Also support `(eta: 2026-11-24T08:30:00Z)` embedded in a purpose line.
+    if let Some(purpose) = body_field(&article.body, "purpose")
+        && let Some(pos) = purpose.to_ascii_lowercase().find("eta:")
+    {
+        let rest = purpose[pos + 4..].trim_start();
+        let token = rest
+            .split(|c: char| c.is_whitespace() || c == ')' || c == '>')
+            .next()
+            .unwrap_or("");
+        if let Some(secs) = rfc3339_seconds(token) {
+            return Some(secs);
+        }
     }
     let minutes: i64 = body_field(&article.body, "expected lease")?
         .split_whitespace()
         .next()?
         .parse()
         .ok()?;
-    Some(format_utc(article_seconds(&article.date)? + minutes * 60))
+    Some(article_seconds(&article.date)? + minutes * 60)
+}
+
+/// The claim's ETA in one shape: `eta: <RFC 3339>` as written, or a Kiln
+/// `expected lease: N minutes` added to the article's Date.
+fn claim_eta(article: &SnapshotArticle) -> Option<String> {
+    claim_eta_seconds(article).map(format_utc)
 }
 
 fn article_seconds(date: &str) -> Option<i64> {
@@ -1009,6 +1266,10 @@ th, td {
 th { color: var(--muted); font-weight: 600; }
 .num { text-align: right; font-variant-numeric: tabular-nums; }
 .date, .from, .meta, .crumb, footer { color: var(--muted); }
+.warn { color: #b91c1c; font-weight: 600; font-size: 0.82rem; }
+@media (prefers-color-scheme: dark) {
+  .warn { color: #fca5a5; }
+}
 .crumb, footer { font-size: 0.9rem; }
 footer { margin-top: 2.5rem; }
 .thread { border-top: 1px solid var(--line); padding: 0.45rem 0; }
@@ -1186,7 +1447,7 @@ mod tests {
             render_site(&snapshot, &out, DEFAULT_SITE_TITLE, DEFAULT_REFRESH_SECONDS).unwrap();
         assert_eq!(first.groups, 2);
         assert_eq!(first.articles, 5);
-        assert_eq!(first.files, 1 + 2 + 5 + 3);
+        assert_eq!(first.files, 1 + 2 + 5 + 1 + 3);
         let once = files_under(&out);
         let twice =
             render_site(&snapshot, &out, DEFAULT_SITE_TITLE, DEFAULT_REFRESH_SECONDS).unwrap();
@@ -1202,6 +1463,7 @@ mod tests {
                 "a/Ada/index.html",
                 "a/Bea/index.html",
                 "a/Cal/index.html",
+                "a/index.html",
                 "g/bots.announce/1.html",
                 "g/bots.announce/index.html",
                 "g/bots.general/1.html",
@@ -1580,6 +1842,181 @@ mod tests {
         let group = fs::read_to_string(out.join("g/bots.general/index.html")).unwrap();
         assert!(group.contains("<title>bots.general — swarm &lt;&amp;&gt;</title>"));
         assert!(!index.contains("slime") && !group.contains("slime"));
+        assert_pages_are_static(&out);
+    }
+
+    #[test]
+    fn newest_key_orders_across_months_and_seconds() {
+        let nov = newest_key("Mon, 30 Nov 2026 23:59:59 +0000");
+        let dec = newest_key("Tue, 01 Dec 2026 00:00:01 +0000");
+        let dec_later = newest_key("Tue, 01 Dec 2026 00:00:30 +0000");
+        assert!(
+            dec > nov,
+            "Dec 1 ({dec}) must sort newer than Nov 30 ({nov})"
+        );
+        assert!(dec_later > dec, "seconds must break ties within a minute");
+        assert!(newest_key("not a date") < nov);
+    }
+
+    #[test]
+    fn index_caps_authors_and_writes_all_authors_page() {
+        let mut snapshot = example();
+        let group = &mut snapshot.groups[0];
+        group.threads.clear();
+        for i in 1..=30u64 {
+            group.threads.push(SnapshotThread {
+                root_message_id: format!("<a{i}@swarm.local>"),
+                articles: vec![SnapshotArticle {
+                    number: i,
+                    message_id: format!("<a{i}@swarm.local>"),
+                    parent_message_id: None,
+                    depth: 0,
+                    from: format!("agent-{i:02} <host+s{i}@swarm.local>"),
+                    subject: format!("post {i}"),
+                    date: format!("Mon, 23 Nov 2026 12:{:02}:00 +0000", i),
+                    references: Vec::new(),
+                    body: "hello\n".to_string(),
+                }],
+            });
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let out = dir.path().join("site");
+        render_site(&snapshot, &out, "swarm", DEFAULT_REFRESH_SECONDS).unwrap();
+        let index = fs::read_to_string(out.join("index.html")).unwrap();
+        assert!(index.contains("Showing 25 of 33 authors"), "{index}");
+        assert!(
+            index.contains("agent-30"),
+            "newest author should be on index"
+        );
+        assert!(
+            !index.contains("agent-01"),
+            "oldest author should be capped off index"
+        );
+        let all_authors = fs::read_to_string(out.join("a/index.html")).unwrap();
+        assert!(all_authors.contains("33 authors"), "{all_authors}");
+        assert!(
+            all_authors.contains("agent-01"),
+            "all authors page must list everyone"
+        );
+        assert!(all_authors.contains("agent-30"));
+        assert_pages_are_static(&out);
+    }
+
+    #[test]
+    fn bots_claims_renders_open_claims_dashboard_and_excludes_closed() {
+        let mut snapshot = example();
+        snapshot.generated_at = "2026-11-24T06:00:00Z".to_string();
+        snapshot.groups.push(SnapshotGroup {
+            name: "bots.claims".to_string(),
+            description: "Active scope claims".to_string(),
+            high: 5,
+            low: 1,
+            posting: "y".to_string(),
+            creator: String::new(),
+            threads: vec![
+                SnapshotThread {
+                    root_message_id: "<c1@swarm.local>".to_string(),
+                    articles: vec![
+                        SnapshotArticle {
+                            number: 1,
+                            message_id: "<c1@swarm.local>".to_string(),
+                            parent_message_id: None,
+                            depth: 0,
+                            from: "kiln on host <kiln@swarm.local>".to_string(),
+                            subject: "CLAIM org/closed .".to_string(),
+                            date: "Tue, 24 Nov 2026 04:00:00 +0000".to_string(),
+                            references: vec![],
+                            body: "purpose: Done work\nholder: omp on host\nexpected lease: 60 minutes\n".to_string(),
+                        },
+                        SnapshotArticle {
+                            number: 2,
+                            message_id: "<r1@swarm.local>".to_string(),
+                            parent_message_id: Some("<c1@swarm.local>".to_string()),
+                            depth: 1,
+                            from: "kiln on host <kiln@swarm.local>".to_string(),
+                            subject: "RELEASE org/closed .".to_string(),
+                            date: "Tue, 24 Nov 2026 04:30:00 +0000".to_string(),
+                            references: vec!["<c1@swarm.local>".to_string()],
+                            body: "Released.\n".to_string(),
+                        },
+                    ],
+                },
+                SnapshotThread {
+                    root_message_id: "<c2@swarm.local>".to_string(),
+                    articles: vec![SnapshotArticle {
+                        number: 3,
+                        message_id: "<c2@swarm.local>".to_string(),
+                        parent_message_id: None,
+                        depth: 0,
+                        from: "agent1 <host+1@swarm.local>".to_string(),
+                        subject: "CLAIM org/superseded .".to_string(),
+                        date: "Tue, 24 Nov 2026 03:00:00 +0000".to_string(),
+                        references: vec![],
+                        body: "purpose: Old lease\neta: 2026-11-24T05:00:00Z\n".to_string(),
+                    }],
+                },
+                SnapshotThread {
+                    root_message_id: "<c3@swarm.local>".to_string(),
+                    articles: vec![SnapshotArticle {
+                        number: 4,
+                        message_id: "<c3@swarm.local>".to_string(),
+                        parent_message_id: None,
+                        depth: 0,
+                        from: "agent1 <host+1@swarm.local>".to_string(),
+                        subject: "CLAIM org/superseded .".to_string(),
+                        date: "Tue, 24 Nov 2026 05:00:00 +0000".to_string(),
+                        references: vec![],
+                        body: "purpose: Renewed lease\neta: 2026-11-24T08:00:00Z\nsupersedes: <c2@swarm.local>\n".to_string(),
+                    }],
+                },
+                SnapshotThread {
+                    root_message_id: "<c4@swarm.local>".to_string(),
+                    articles: vec![SnapshotArticle {
+                        number: 5,
+                        message_id: "<c4@swarm.local>".to_string(),
+                        parent_message_id: None,
+                        depth: 0,
+                        from: "kiln on host <kiln@swarm.local>".to_string(),
+                        subject: "CLAIM host system".to_string(),
+                        date: "Tue, 24 Nov 2026 02:00:00 +0000".to_string(),
+                        references: vec![],
+                        body: "purpose: Deploy <script>\nholder: antigravity on host\nexpected lease: 60 minutes\n".to_string(),
+                    }],
+                },
+            ],
+        });
+        let dir = tempfile::tempdir().unwrap();
+        let out = dir.path().join("site");
+        render_site(&snapshot, &out, "swarm", DEFAULT_REFRESH_SECONDS).unwrap();
+
+        let claims = fs::read_to_string(out.join("claims.html")).unwrap();
+        assert!(claims.contains("2 open claims"), "{claims}");
+        assert!(
+            !claims.contains("org/closed"),
+            "released claim must be excluded"
+        );
+        assert!(
+            !claims.contains("Old lease"),
+            "superseded claim must be excluded"
+        );
+        assert!(claims.contains("org/superseded ."), "{claims}");
+        assert!(claims.contains("Renewed lease"), "{claims}");
+        assert!(claims.contains("host system"), "{claims}");
+        assert!(
+            claims.contains("OVERDUE"),
+            "expired claim must be marked OVERDUE"
+        );
+        assert!(
+            claims.contains("Deploy &lt;script&gt;"),
+            "purpose must be escaped"
+        );
+        let index = fs::read_to_string(out.join("index.html")).unwrap();
+        assert!(
+            index.contains("href=\"claims.html\">Open claims</a>"),
+            "{index}"
+        );
+        let group = fs::read_to_string(out.join("g/bots.claims/index.html")).unwrap();
+        assert!(group.contains("2 open claims"), "{group}");
         assert_pages_are_static(&out);
     }
 }

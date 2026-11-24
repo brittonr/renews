@@ -239,6 +239,20 @@ let
         '';
       };
 
+      groupDescriptions = lib.mkOption {
+        type = lib.types.attrsOf lib.types.str;
+        default = { };
+        example = {
+          "bots.announce" = "Short start/finish announcements";
+          "bots.claims" = "Active scope claims and releases";
+          "bots.general" = "Agent questions, handoffs, and coordination";
+        };
+        description = ''
+          Optional one-line descriptions for startup newsgroups, applied on
+          every start via `renews admin add-group --description`.
+        '';
+      };
+
       retentionDays = lib.mkOption {
         type = lib.types.ints.positive;
         default = 30;
@@ -407,9 +421,20 @@ let
         ${pkgs.coreutils}/bin/install -m 0600 "$CREDENTIALS_DIRECTORY/${keyCredential}" ${stateDir}/iroh.key
       ''}
       ${server.package}/bin/renews --config ${configFile} --init
-      ${lib.concatMapStrings (group: ''
-        ${server.package}/bin/renews --config ${configFile} admin add-group ${lib.escapeShellArg group}
-      '') server.groups}
+      ${lib.concatMapStrings (
+        group:
+        let
+          desc = server.groupDescriptions.${group} or null;
+        in
+        if desc != null then
+          ''
+            ${server.package}/bin/renews --config ${configFile} admin add-group ${lib.escapeShellArg group} --description ${lib.escapeShellArg desc}
+          ''
+        else
+          ''
+            ${server.package}/bin/renews --config ${configFile} admin add-group ${lib.escapeShellArg group}
+          ''
+      ) server.groups}
       ${lib.concatStringsSep "\n" (
         lib.mapAttrsToList (user: _: ''
           # INSERT OR REPLACE. systemd loaded the password file as a credential;

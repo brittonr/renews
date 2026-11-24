@@ -65,6 +65,9 @@ enum AdminCommand {
         /// Additional group names
         #[arg(required = false)]
         groups: Vec<String>,
+        /// Optional one-line description (updates existing group descriptions too)
+        #[arg(long)]
+        description: Option<String>,
     },
     /// Remove newsgroups matching a wildmat pattern
     RemoveGroup {
@@ -353,12 +356,25 @@ async fn run_admin(cmd: AdminCommand, cfg: &Config) -> Result<()> {
             });
             println!("{payload}");
         }
-        AdminCommand::AddGroup { group, groups } => {
-            // Add the first group
-            storage.add_group(&group, false).await?;
-            // Add any additional groups
-            for g in groups {
-                storage.add_group(&g, false).await?;
+        AdminCommand::AddGroup {
+            group,
+            groups,
+            description,
+        } => {
+            if let Some(desc) = description {
+                storage
+                    .add_group_with_description(&group, false, &desc)
+                    .await?;
+                for g in groups {
+                    storage.add_group_with_description(&g, false, &desc).await?;
+                }
+            } else {
+                // Add the first group
+                storage.add_group(&group, false).await?;
+                // Add any additional groups
+                for g in groups {
+                    storage.add_group(&g, false).await?;
+                }
             }
         }
         AdminCommand::RemoveGroup { wildmat } => {

@@ -278,6 +278,32 @@ impl Session {
         Ok(articles)
     }
 
+    /// Read the newest `last` articles from `group`, in ascending article order.
+    ///
+    /// Does not modify any saved cursor.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the group is missing or an article cannot be read.
+    pub async fn read_last(&mut self, group: &str, last: usize) -> anyhow::Result<Vec<Article>> {
+        if last == 0 {
+            return Ok(Vec::new());
+        }
+        let status = self.client.group(group).await?;
+        if status.count == 0 || status.high == 0 || status.low == 0 {
+            return Ok(Vec::new());
+        }
+        let range = format!("{}-{}", status.low, status.high);
+        let overview = self.client.over(Some(&range)).await?;
+        let skip = overview.len().saturating_sub(last);
+        let tail = &overview[skip..];
+        let mut articles = Vec::with_capacity(tail.len());
+        for item in tail {
+            articles.push(self.client.article(&item.number.to_string()).await?);
+        }
+        Ok(articles)
+    }
+
     /// `POST` an article. The body is dot-stuffed.
     ///
     /// Returns the article's `Message-ID`, `<...>` included: the one in
@@ -843,6 +869,52 @@ impl<W: AsyncWrite + Unpin> AsyncWrite for Flushing<W> {
     }
 }
 
+/// Build a per-session `From` header from the base account `From` and a session label.
+///
+/// Produces `<session> <local+<12-hex-sha256>@domain>` so two sessions sharing
+/// one machine account always have distinct, collision-free email addresses
+/// even when their labels share a long prefix.
+///
+/// # Errors
+///
+/// Returns an error when `session` is empty, overly long, contains control
+/// characters or angle brackets, or `base_from` has no valid `local@domain`.
+pub fn format_session_from(base_from: &str, session: &str) -> anyhow::Result<String> {
+    use sha2::{Digest, Sha256};
+
+    let session = session.trim();
+    if session.is_empty() {
+        bail!("session label must not be empty");
+    }
+    if session.len() > 200 {
+        bail!("session label is too long (max 200 bytes)");
+    }
+    if session
+        .chars()
+        .any(|c| c.is_control() || matches!(c, '<' | '>'))
+    {
+        bail!("session label must not contain control characters or angle brackets");
+    }
+
+    let address = match base_from.rsplit_once('<') {
+        Some((_, rest)) => rest.trim_end_matches('>').trim(),
+        None => base_from.trim(),
+    };
+    let (local, domain) = address
+        .split_once('@')
+        .filter(|(l, d)| !l.is_empty() && !d.is_empty())
+        .ok_or_else(|| anyhow::anyhow!("base From address {base_from:?} has no local@domain"))?;
+    let base_local = local.split_once('+').map_or(local, |(base, _)| base);
+
+    let digest = Sha256::digest(session.as_bytes());
+    let mut tag = String::with_capacity(12);
+    for byte in &digest[..6] {
+        use std::fmt::Write as _;
+        let _ = write!(&mut tag, "{byte:02x}");
+    }
+    Ok(format!("{session} <{base_local}+{tag}@{domain}>"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -945,5 +1017,33 @@ mod tests {
         assert_eq!(std::fs::read_to_string(&config).unwrap(), "keep\n");
         assert!(again.human().contains("owner: (not given)"));
         assert!(!again.password_file.exists());
+    }
+
+    #[test]
+    fn format_session_from_hashes_long_labels_without_collision() {
+        let base = "britton-desktop <britton-desktop@swarm.local>";
+        let a =
+            format_session_from(base, "antigravity on britton-desktop, session 3dde2dbb").unwrap();
+        let b =
+            format_session_from(base, "antigravity on britton-desktop, session 2cf335d7").unwrap();
+        assert!(
+            a.starts_with("antigravity on britton-desktop, session 3dde2dbb <britton-desktop+")
+        );
+        assert!(a.ends_with("@swarm.local>"));
+        assert_ne!(a, b);
+
+        // Strips any existing +tag on base_from.
+        let tagged = format_session_from(
+            "old <britton-desktop+oldtag@swarm.local>",
+            "omp on britton-desktop, session 1",
+        )
+        .unwrap();
+        assert!(tagged.contains("<britton-desktop+"));
+        assert!(!tagged.contains("oldtag"));
+
+        assert!(format_session_from(base, "").is_err());
+        assert!(format_session_from(base, "bad\nline").is_err());
+        assert!(format_session_from(base, "bad <tag>").is_err());
+        assert!(format_session_from("not-an-address", "ok").is_err());
     }
 }

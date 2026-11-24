@@ -124,12 +124,11 @@ async fn a_token_admits_its_endpoint_and_only_its_groups() {
         })
         .await;
     session.close().await.ok();
-    match denied {
-        Ok(articles) => assert!(
+    if let Ok(articles) = denied {
+        assert!(
             articles.is_empty(),
             "read outside the grant leaked articles"
-        ),
-        Err(_) => {}
+        );
     }
 
     let stranger = Settings {

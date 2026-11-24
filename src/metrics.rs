@@ -110,6 +110,12 @@ impl Metrics {
 /// Counts one NNTP connection for as long as it is held.
 pub struct ConnectionGuard;
 
+impl Default for ConnectionGuard {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ConnectionGuard {
     pub fn new() -> Self {
         METRICS.connection_opened();

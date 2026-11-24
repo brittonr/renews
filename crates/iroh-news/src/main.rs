@@ -73,6 +73,9 @@ enum Command {
         /// Maximum number of articles.
         #[arg(long)]
         limit: Option<usize>,
+        /// Read only the newest N articles in ascending order.
+        #[arg(long, conflicts_with_all = ["since", "new"])]
+        last: Option<usize>,
         /// Continue from the per-group cursor in the state directory.
         #[arg(long)]
         new: bool,
@@ -104,6 +107,9 @@ enum Command {
         /// pages. Article pages never reload. `0` leaves every page static.
         #[arg(long, default_value_t = iroh_news::render::DEFAULT_REFRESH_SECONDS)]
         refresh: u64,
+        /// Rewrite `snapshot.json` and `--html` even when no new articles arrived.
+        #[arg(long)]
+        force_render: bool,
     },
     /// Write a static HTML site from a snapshot file.
     ///
@@ -132,6 +138,9 @@ enum Command {
         /// Message-id this article follows.
         #[arg(long)]
         references: Option<String>,
+        /// Session attribution label (sets From to `<session> <account+hash@domain>`).
+        #[arg(long)]
+        session: Option<String>,
     },
     /// Follow new articles. Uses iroh-gossip, and polls if gossip is down.
     Watch {
@@ -182,6 +191,9 @@ enum Command {
         /// Also expose admin tools. Requires this endpoint id in aspen1 `adminPeers`.
         #[arg(long)]
         admin: bool,
+        /// Hide `read_new` so agents sharing a state directory cannot move one shared cursor.
+        #[arg(long)]
+        no_shared_cursor: bool,
     },
     /// Call the admin channel. Same operations as the admin MCP tools.
     Admin {
@@ -336,6 +348,9 @@ struct FileConfig {
     /// Expose admin MCP tools. The endpoint id must be in aspen1 `adminPeers`.
     #[serde(default)]
     admin: bool,
+    /// Hide `read_new` in MCP so multiple agents cannot race on a shared cursor.
+    #[serde(default)]
+    no_shared_cursor: bool,
     /// Directory for generated passwords. Setting it keeps them in files even
     /// when SecretSpec is available. Defaults to `$state_dir/secrets`.
     #[serde(default)]
@@ -444,18 +459,23 @@ async fn run() -> anyhow::Result<()> {
             ref group,
             since,
             limit,
+            last,
             new,
         } => {
             let mut session = open_session(&cli, &state_dir).await?;
-            let since = resolve_since(&session, group, since, new)?;
-            let articles = session
-                .read(ReadRequest {
-                    group: group.clone(),
-                    since,
-                    limit,
-                    update_cursor: new,
-                })
-                .await?;
+            let articles = if let Some(last) = last {
+                session.read_last(group, last).await?
+            } else {
+                let since = resolve_since(&session, group, since, new)?;
+                session
+                    .read(ReadRequest {
+                        group: group.clone(),
+                        since,
+                        limit,
+                        update_cursor: new,
+                    })
+                    .await?
+            };
             print_json(&articles)?;
             session.close().await?;
             Ok(())
@@ -467,6 +487,7 @@ async fn run() -> anyhow::Result<()> {
             ref html,
             ref title,
             refresh,
+            force_render,
         } => {
             if let Some(html) = html {
                 let snapshot_file = out.join(iroh_news::snapshot::SNAPSHOT_FILE);
@@ -485,13 +506,28 @@ async fn run() -> anyhow::Result<()> {
             )
             .await?;
             session.close().await?;
-            let path = iroh_news::snapshot::write_snapshot(out, &fetched.snapshot)?;
-            let html_path = if let Some(html) = html {
-                let rendered =
-                    iroh_news::render::render_site(&fetched.snapshot, html, title, refresh)?;
-                Some(rendered.directory)
+            let unchanged = !full
+                && !force_render
+                && fetched.fetched_articles == 0
+                && previous
+                    .as_ref()
+                    .is_some_and(|prev| prev.groups == fetched.snapshot.groups);
+            let snapshot_file = out.join(iroh_news::snapshot::SNAPSHOT_FILE);
+            let path = if unchanged && snapshot_file.is_file() {
+                snapshot_file
             } else {
-                None
+                iroh_news::snapshot::write_snapshot(out, &fetched.snapshot)?
+            };
+            let (html_path, rendered) = if let Some(html) = html {
+                if unchanged && html.join("index.html").is_file() {
+                    (Some(html.clone()), false)
+                } else {
+                    let rendered =
+                        iroh_news::render::render_site(&fetched.snapshot, html, title, refresh)?;
+                    (Some(rendered.directory), true)
+                }
+            } else {
+                (None, false)
             };
             let counts = fetched.snapshot.counts();
             let mut summary = serde_json::json!({
@@ -502,6 +538,7 @@ async fn run() -> anyhow::Result<()> {
                 "threads": counts.threads,
                 "articles": counts.articles,
                 "fetched_articles": fetched.fetched_articles,
+                "rendered": rendered,
             });
             if let Some(html_path) = html_path {
                 summary["html"] = serde_json::Value::String(html_path.display().to_string());
@@ -539,9 +576,13 @@ async fn run() -> anyhow::Result<()> {
             ref group,
             ref subject,
             ref references,
+            ref session,
         } => {
             let settings = load_settings(&cli, &state_dir)?;
-            let from = settings.from.clone();
+            let from = match session.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+                Some(label) => iroh_news::format_session_from(&settings.from, label)?,
+                None => settings.from.clone(),
+            };
             let mut body = String::new();
             tokio::io::AsyncReadExt::read_to_string(&mut tokio::io::stdin(), &mut body).await?;
             let mut session = Session::connect(settings).await?;
@@ -687,9 +728,14 @@ async fn run() -> anyhow::Result<()> {
             }))?;
             Ok(())
         }
-        Command::Mcp { admin } => {
+        Command::Mcp {
+            admin,
+            no_shared_cursor,
+        } => {
             let file = read_file_config(&cli)?;
             let admin = admin || file.as_ref().is_some_and(|cfg| cfg.admin);
+            let no_shared_cursor =
+                no_shared_cursor || file.as_ref().is_some_and(|cfg| cfg.no_shared_cursor);
             let server = cli
                 .server
                 .clone()
@@ -725,6 +771,7 @@ async fn run() -> anyhow::Result<()> {
                 secrets_dir,
                 store,
                 admin,
+                no_shared_cursor,
                 discovery,
                 server_id: pinned_server_id(file.as_ref())?,
             })
